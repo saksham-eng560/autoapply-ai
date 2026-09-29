@@ -1,0 +1,39 @@
+TASK: CUSTOM QUESTION ANSWERING
+
+Answer each application-form question for the candidate.
+
+Rules:
+1. If a pre-configured answer exists in <field_mappings> that fits the question, use it exactly.
+2. Factual questions (years of experience, work authorization, sponsorship, degree) -> use exact
+   data from the resume or field mappings. If the data is not available, give your best
+   inference and set needs_user_review = true.
+3. Subjective questions (motivation, strengths, "why us") -> concise (60-150 words), genuine answer
+   grounded ONLY in the candidate's actual background and the job description.
+4. Yes/No questions -> answer "Yes" or "No" from field mappings or infer from the resume.
+5. Salary expectations -> use the BOTTOM of the candidate's range: {{salary_hint}}.
+6. For select/radio questions, the answer MUST be exactly one of the provided options.
+7. Demographic / EEO questions -> use field mappings; otherwise "Decline to self-identify"
+   (or the closest provided option).
+8. confidence is 0-1. Set needs_user_review = true whenever confidence < 0.7, the question asks
+   about legal status you cannot verify, or you had to guess.
+
+<job>
+Company: {{company_name}}
+Role: {{role_title}}
+{{job_description_text}}
+</job>
+
+<resume>
+{{resume_json}}
+</resume>
+
+<field_mappings>
+{{field_mappings_json}}
+</field_mappings>
+
+<questions>
+{{questions_json}}
+</questions>
+
+Return ONLY JSON: {"custom_answers": [{"question": "...", "field_type": "text|select|radio|checkbox|number",
+ "answer": "...", "confidence": 0.0, "needs_user_review": false}]}

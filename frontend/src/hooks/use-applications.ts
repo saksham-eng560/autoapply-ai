@@ -1,0 +1,48 @@
+"use client";
+
+import useSWR from "swr";
+import { fetcher } from "@/lib/api-client";
+import type {
+  AgentStatus,
+  ApplicationDetail,
+  ApplicationSummary,
+  Integrations,
+  NotificationItem,
+  Overview,
+  Paginated,
+  User,
+} from "@/lib/types";
+
+const LIVE = { refreshInterval: 15000, revalidateOnFocus: true };
+
+export function useMe() {
+  return useSWR<User>("/auth/me", fetcher);
+}
+
+export function useAgentStatus() {
+  return useSWR<AgentStatus>("/agent/status", fetcher, LIVE);
+}
+
+export function useOverview(days?: number) {
+  return useSWR<Overview>(`/analytics/overview${days ? `?days=${days}` : ""}`, fetcher, LIVE);
+}
+
+export function useApplications(params: Record<string, string | number | boolean | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== "") query.set(k, String(v));
+  });
+  return useSWR<Paginated<ApplicationSummary>>(`/applications?${query.toString()}`, fetcher, LIVE);
+}
+
+export function useApplication(id: string | undefined) {
+  return useSWR<ApplicationDetail>(id ? `/applications/${id}` : null, fetcher, LIVE);
+}
+
+export function useNotifications() {
+  return useSWR<{ items: NotificationItem[]; unread: number }>("/notifications?limit=30", fetcher, { refreshInterval: 30000 });
+}
+
+export function useIntegrations() {
+  return useSWR<Integrations>("/users/me/integrations", fetcher);
+}

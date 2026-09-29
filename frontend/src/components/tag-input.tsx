@@ -1,0 +1,46 @@
+"use client";
+
+import { useState } from "react";
+import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+export function TagInput({ value, onChange, placeholder, className }: {
+  value: string[];
+  onChange: (value: string[]) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState("");
+  const add = (raw: string) => {
+    const items = raw.split(",").map((s) => s.trim()).filter(Boolean).filter((s) => !value.includes(s));
+    if (items.length) onChange([...value, ...items]);
+    setDraft("");
+  };
+  return (
+    <div className={cn("flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm focus-within:ring-1 focus-within:ring-ring", className)}>
+      {value.map((tag) => (
+        <span key={tag} className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-0.5 text-xs">
+          {tag}
+          <button type="button" onClick={() => onChange(value.filter((t) => t !== tag))} aria-label={`Remove ${tag}`}>
+            <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
+          </button>
+        </span>
+      ))}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            add(draft);
+          } else if (e.key === "Backspace" && !draft && value.length) {
+            onChange(value.slice(0, -1));
+          }
+        }}
+        onBlur={() => draft && add(draft)}
+        placeholder={value.length ? "" : placeholder}
+        className="min-w-[8rem] flex-1 bg-transparent px-1 outline-none placeholder:text-muted-foreground"
+      />
+    </div>
+  );
+}

@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import copy
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base, JSONType, UTCDateTime, utcnow
+from app.core.security import EncryptedJSON, EncryptedText
+
+if TYPE_CHECKING:
+    from app.models.application import Application
+    from app.models.resume import Resume
+
+DEFAULT_PREFERENCES: dict[str, Any] = {
+    # --- PLAN.md §4 defaults ---
+    "target_roles": [],
+    "target_locations": [],
+    "remote_preference": "hybrid",  # remote | hybrid | onsite | any
+    "salary_min": None,
+    "salary_max": None,
+    "salary_currency": "USD",
+    "experience_level": [],
+    "industries": [],
+    "company_size_preference": [],
+    "companies_to_avoid": [],
+    "companies_to_target": [],
+    "max_applications_per_day": 25,
+    "auto_apply_threshold": 80,
+    "job_types": ["full-time", "internship"],
+    "notification_channels": ["email", "dashboard"],
+    # --- Extended settings ---
+    "keywords_exclude": [],
+    "posted_within_days": 14,
+    "scan_enabled": True,
+    "scan_interval_hours": 6,
+    "platforms": ["greenhouse", "lever", "ashby", "workday", "linkedin", "generic"],
+    "sources": {
+        # ATS boards to crawl directly (public APIs, no login needed)
+        "greenhouse_boards": [],   # e.g. ["stripe", "airbnb"]
+        "lever_companies": [],     # e.g. ["netflix"]
+        "ashby_boards": [],        # e.g. ["openai"]
+        "workday_sites": [],       # e.g. ["https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"]
+        "career_pages": [],        # any careers page URL (JSON-LD / ATS link detection)
+    },
+    "discord_webhook_url": None,
+    "slack_webhook_url": None,
+    "timezone": "UTC",
+    "cover_letter_enabled": True,
+}
+
+
+def default_preferences() -> dict[str, Any]:
+    return copy.deepcopy(DEFAULT_PREFERENCES)
+
+
+def merge_preferences(current: dict[str, Any] | None, updates: dict[str, Any] | None) -> dict[str, Any]:
+    merged = default_preferences()
+    for source in (current or {}, updates or {}):
+        for key, value in source.items():
+            if key == "sources" and isinstance(value, dict):
+                merged["sources"] = {**merged.get("sources", {}), **value}
+            else:
+                merged[key] = value
+    return merged
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(50))
+    linkedin_url: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(String(255))
+    hashed_password: Mapped[str | None] = mapped_column(String(255))
+
+    # OAuth tokens (AES-256-GCM encrypted at rest)
+    google_access_token: Mapped[str | None] = mapped_column(EncryptedText)
+    google_refresh_token: Mapped[str | None] = mapped_column(EncryptedText)
+    google_token_expiry: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    google_scopes: Mapped[list[str] | None] = mapped_column(JSONType)
+    google_email: Mapped[str | None] = mapped_column(String(255))
+    gmail_history_id: Mapped[str | None] = mapped_column(String(64))
+    gmail_watch_expiration: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    gmail_last_polled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    linkedin_session_cookie: Mapped[str | None] = mapped_column(EncryptedText)
+    linkedin_cookie_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    linkedin_session_valid: Mapped[bool] = mapped_column(Boolean, default=False)
+    linkedin_profile_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+
+    # Per-ATS login credentials (e.g. Workday tenant accounts), encrypted JSON
+    ats_credentials: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)
+
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=default_preferences)
+
+    consents: Mapped[dict[str, Any] | None] = mapped_column(JSONType, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+    resumes: Mapped[list[Resume]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    applications: Mapped[list[Application]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    field_mappings: Mapped[list[UserFieldMapping]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def first_name(self) -> str:
+        return (self.full_name or "").split(" ")[0]
+
+    @property
+    def last_name(self) -> str:
+        parts = (self.full_name or "").split(" ")
+        return " ".join(parts[1:]) if len(parts) > 1 else ""
+
+    @property
+    def prefs(self) -> dict[str, Any]:
+        return merge_preferences(self.preferences, None)
+
+    @property
+    def google_connected(self) -> bool:
+        return bool(self.google_refresh_token or self.google_access_token)
+
+
+class UserFieldMapping(Base):
+    __tablename__ = "user_field_mappings"
+    __table_args__ = (UniqueConstraint("user_id", "field_name", name="uq_user_field_mapping"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    field_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    field_value: Mapped[str] = mapped_column(Text, nullable=False)
+    field_type: Mapped[str | None] = mapped_column(String(50))
+
+    user: Mapped[User] = relationship(back_populates="field_mappings")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    link: Mapped[str | None] = mapped_column(Text)
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)

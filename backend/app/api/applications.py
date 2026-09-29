@@ -1,0 +1,201 @@
+"""Application tracking, review & approval (the human-in-the-loop gate)."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import func, or_, select
+
+from app.api.deps import DB, CurrentUser, parse_uuid
+from app.api.serializers import application_detail, application_summary, history_out, resume_out
+from app.models.application import Application
+from app.models.communication import Communication
+from app.models.enums import ApplicationStatus
+from app.models.interview import Interview
+from app.models.job import Job
+from app.schemas.application import ApplicationUpdate, ApproveRequest, StatusUpdate, TailoredResumeUpdate
+from app.schemas.resume_content import normalize_resume
+from app.services import agent_orchestrator as orch
+from app.services.application_service import set_status
+from app.worker.dispatch import enqueue
+
+router = APIRouter(prefix="/applications", tags=["applications"])
+
+MANUAL_STATUSES = {
+    ApplicationStatus.APPLIED, ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.SCREENING, ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ASSESSMENT, ApplicationStatus.FINAL_ROUND, ApplicationStatus.OFFER, ApplicationStatus.ACCEPTED,
+    ApplicationStatus.REJECTED, ApplicationStatus.WITHDRAWN, ApplicationStatus.SKIPPED,
+}
+
+
+def _get(db: DB, user_id, application_id: str) -> Application:  # type: ignore[no-untyped-def]
+    app = db.get(Application, parse_uuid(application_id))
+    if app is None or app.user_id != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    return app
+
+
+def _detail(db: DB, app: Application) -> dict:
+    comms = db.scalars(select(Communication).where(Communication.application_id == app.id)
+                       .order_by(Communication.received_at.desc())).all()
+    interviews = db.scalars(select(Interview).where(Interview.application_id == app.id).order_by(Interview.scheduled_at)).all()
+    return application_detail(app, list(comms), list(interviews))
+
+
+@router.get("")
+def list_applications(
+    user: CurrentUser,
+    db: DB,
+    status_filter: list[str] | None = Query(default=None, alias="status"),
+    q: str | None = None,
+    platform: str | None = None,
+    needs_review: bool | None = None,
+    sort: str = "updated",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> dict:
+    query = select(Application).join(Job, Job.id == Application.job_id).where(Application.user_id == user.id)
+    if status_filter:
+        try:
+            statuses = [ApplicationStatus(part) for raw in status_filter for part in raw.split(",") if part]
+        except ValueError as exc:
+            raise HTTPException(422, "Unknown status") from exc
+        query = query.where(Application.status.in_(statuses))
+    else:
+        query = query.where(Application.status.notin_([ApplicationStatus.DISCOVERED, ApplicationStatus.SKIPPED]))
+    if q:
+        like = f"%{q.lower()}%"
+        query = query.where(or_(func.lower(Job.role_title).like(like), func.lower(Job.company_name).like(like)))
+    if platform:
+        query = query.where(Job.source_platform == platform)
+    if needs_review is not None:
+        query = query.where(Application.needs_manual_review.is_(needs_review))
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    order = {
+        "updated": Application.updated_at.desc(),
+        "match": Application.match_score.desc().nulls_last(),
+        "created": Application.created_at.desc(),
+        "company": Job.company_name.asc(),
+    }.get(sort, Application.updated_at.desc())
+    apps = db.scalars(query.order_by(order).offset((page - 1) * page_size).limit(page_size)).all()
+    counts = dict(db.execute(select(Application.status, func.count()).where(Application.user_id == user.id)
+                             .group_by(Application.status)).all())
+    return {"items": [application_summary(a) for a in apps], "total": total, "page": page, "page_size": page_size,
+            "counts": {k.value: v for k, v in counts.items()}}
+
+
+@router.get("/{application_id}")
+def get_application(application_id: str, user: CurrentUser, db: DB) -> dict:
+    return _detail(db, _get(db, user.id, application_id))
+
+
+@router.patch("/{application_id}")
+def update_application(application_id: str, body: ApplicationUpdate, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    if body.cover_letter is not None:
+        app.cover_letter = body.cover_letter
+    if body.custom_answers is not None:
+        app.custom_answers = [a.model_dump(exclude_none=True) for a in body.custom_answers]
+    if body.notes is not None:
+        app.notes = body.notes
+    if body.status:
+        try:
+            new_status = ApplicationStatus(body.status)
+        except ValueError as exc:
+            raise HTTPException(422, "Unknown status") from exc
+        if new_status not in MANUAL_STATUSES:
+            raise HTTPException(422, f"Cannot set status '{new_status.value}' manually")
+        set_status(db, app, new_status, "user", "Updated manually")
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/approve", status_code=202)
+def approve(application_id: str, body: ApproveRequest, user: CurrentUser, db: DB) -> dict:
+    """Explicit user approval — the ONLY path that leads to a submission."""
+    app = _get(db, user.id, application_id)
+    edited = [a.model_dump(exclude_none=True) for a in body.custom_answers] if body.custom_answers is not None else None
+    missing = [a.get("question") for a in (edited if edited is not None else app.custom_answers or [])
+               if a.get("required") and not str(a.get("answer") or "").strip()]
+    if missing:
+        raise HTTPException(422, "Answer the required question(s) before approving: " + "; ".join(str(m) for m in missing))
+    try:
+        orch.approve_application(db, app, cover_letter=body.cover_letter, custom_answers=edited)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/skip")
+def skip(application_id: str, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    if app.status in (ApplicationStatus.APPLIED, ApplicationStatus.APPROVED):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Already submitted / being submitted")
+    set_status(db, app, ApplicationStatus.SKIPPED, "user", "Skipped by user")
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/withdraw")
+def withdraw(application_id: str, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    set_status(db, app, ApplicationStatus.WITHDRAWN, "user", "Withdrawn by user")
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/mark-applied")
+def mark_applied(application_id: str, user: CurrentUser, db: DB) -> dict:
+    """User applied manually (e.g. after a manual-review flag)."""
+    app = _get(db, user.id, application_id)
+    set_status(db, app, ApplicationStatus.APPLIED, "user", "Marked as applied manually")
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/restage", status_code=202)
+def restage(application_id: str, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only pending or failed applications can be re-staged")
+    set_status(db, app, ApplicationStatus.PREPARING, "user", "Re-filling the form")
+    enqueue("stage_application", str(app.id), after_commit=db)
+    return _detail(db, app)
+
+
+@router.post("/{application_id}/prepare", status_code=202)
+def reprepare(application_id: str, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    if app.status in (ApplicationStatus.APPROVED, ApplicationStatus.APPLIED):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Already submitted / being submitted")
+    if orch.get_master_resume(db, user) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a master resume first")
+    set_status(db, app, ApplicationStatus.PREPARING, "user", "Re-preparing documents")
+    enqueue("prepare_application", str(app.id), after_commit=db)
+    return _detail(db, app)
+
+
+@router.put("/{application_id}/resume")
+def update_tailored_resume(application_id: str, body: TailoredResumeUpdate, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    if app.tailored_resume is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No tailored resume for this application")
+    resume = app.tailored_resume
+    resume.parsed_content = normalize_resume(body.parsed_content)
+    resume.version = (resume.version or 1) + 1
+    app.tailored_resume_pdf_url = orch.render_tailored_pdf(user, resume)
+    return resume_out(resume)
+
+
+@router.post("/{application_id}/status")
+def update_status(application_id: str, body: StatusUpdate, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    try:
+        new_status = ApplicationStatus(body.status)
+    except ValueError as exc:
+        raise HTTPException(422, "Unknown status") from exc
+    if new_status not in MANUAL_STATUSES:
+        raise HTTPException(422, f"Cannot set status '{new_status.value}' manually")
+    set_status(db, app, new_status, "user", body.notes or "Updated manually")
+    return _detail(db, app)
+
+
+@router.get("/{application_id}/history")
+def history(application_id: str, user: CurrentUser, db: DB) -> dict:
+    app = _get(db, user.id, application_id)
+    return {"items": [history_out(h) for h in app.history]}
