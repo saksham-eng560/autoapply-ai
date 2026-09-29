@@ -171,3 +171,28 @@ def years_of_experience_required(text: str) -> int | None:
     matches = re.findall(r"(\d{1,2})\s*\+?\s*(?:-\s*\d{1,2}\s*)?(?:years|yrs)", normalize_text(text))
     values = [int(m) for m in matches if 0 < int(m) < 30]
     return min(values) if values else None
+
+
+_DISPLAY = {
+    "javascript": "JavaScript", "typescript": "TypeScript", "node.js": "Node.js", "next.js": "Next.js", "vue": "Vue",
+    "postgresql": "PostgreSQL", "mysql": "MySQL", "mongodb": "MongoDB", "graphql": "GraphQL", "fastapi": "FastAPI",
+    "nestjs": "NestJS", "pytorch": "PyTorch", "tensorflow": "TensorFlow", "scikit-learn": "scikit-learn", "numpy": "NumPy",
+    "pyspark": "PySpark", "dynamodb": "DynamoDB", "bigquery": "BigQuery", "github actions": "GitHub Actions",
+    "gitlab ci": "GitLab CI", "ci/cd": "CI/CD", "rest api": "REST APIs", "grpc": "gRPC", "ios": "iOS", "swiftui": "SwiftUI",
+    "objective-c": "Objective-C", "c++": "C++", "c#": "C#", ".net": ".NET", "asp.net": "ASP.NET", "ui/ux": "UI/UX",
+    "a/b testing": "A/B testing", "mlops": "MLOps", "llm": "LLMs", "nlp": "NLP", "oop": "OOP", "tdd": "TDD", "sre": "SRE",
+    "devops": "DevOps", "jquery": "jQuery", "elasticsearch": "Elasticsearch", "redis": "Redis", "sql": "SQL",
+    "aws": "AWS", "gcp": "GCP", "etl": "ETL", "html": "HTML", "css": "CSS", "php": "PHP", "sap": "SAP", "seo": "SEO",
+    "jwt": "JWT", "oauth": "OAuth", "rag": "RAG", "ros": "ROS", "fpga": "FPGA", "k8s": "Kubernetes", "go": "Go",
+    "power bi": "Power BI", "hugging face": "Hugging Face", "langchain": "LangChain", "pgvector": "pgvector",
+}
+
+
+def display_skill(skill: str) -> str:
+    """Human-facing spelling of a canonical skill key ("postgresql" -> "PostgreSQL")."""
+    key = canonical_skill(skill)
+    if key in _DISPLAY:
+        return _DISPLAY[key]
+    if skill and skill != key:  # already user-provided casing
+        return skill.strip()
+    return " ".join(w if any(c.isupper() for c in w) else w.capitalize() for w in key.split(" "))

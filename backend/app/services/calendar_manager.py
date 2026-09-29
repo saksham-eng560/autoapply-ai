@@ -16,7 +16,7 @@ from app.services import llm_schemas
 from app.services.google_oauth import GoogleAuthError, GoogleNotConfigured, build_service, has_scope
 from app.services.job_matcher import job_skills, job_text, resume_skill_set
 from app.services.llm import LLMError, get_llm, render_prompt
-from app.services.text_utils import truncate
+from app.services.text_utils import display_skill, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ def heuristic_prep(resume_content: dict[str, Any], application: Application, int
     resume = ResumeContent.model_validate(resume_content)
     required = job_skills(job)
     have = resume_skill_set(resume)
-    matched = [s for s in required if s in have]
-    gaps = [s for s in required if s not in have]
+    matched = [display_skill(s) for s in required if s in have]
+    gaps = [display_skill(s) for s in required if s not in have]
     stories = []
     for exp in resume.experience[:3]:
         if exp.bullets:
@@ -37,7 +37,7 @@ def heuristic_prep(resume_content: dict[str, Any], application: Application, int
     notes = "\n".join(
         [
             f"ROLE: {job.role_title} at {job.company_name} ({itype})",
-            f"What they need most: {', '.join(required[:8]) or 'see job description'}",
+            f"What they need most: {', '.join(display_skill(s) for s in required[:8]) or 'see job description'}",
             f"Your strongest overlaps: {', '.join(matched[:8]) or 'relevant experience from your resume'}",
             "Stories to tell:",
             *(stories or ["- Pick 2-3 projects that best match the role."]),

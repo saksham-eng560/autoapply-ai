@@ -13,6 +13,7 @@ from app.services import llm_schemas
 from app.services.llm import LLMError, get_llm, render_prompt
 from app.services.text_utils import (
     canonical_skill,
+    display_skill,
     extract_skills,
     keyword_overlap,
     normalize_company,
@@ -186,7 +187,7 @@ def heuristic_evaluation(resume_content: dict[str, Any], job: Job, prefs: dict[s
     compensation_score = _compensation_score(job, prefs)
     total = skills_score + experience_score + industry_score + location_score + compensation_score
 
-    strong = matched[:6]
+    strong = [display_skill(s) for s in matched[:6]]
     reasoning = (
         f"Matches {len(matched)} of {len(required) or 'n/a'} detected skills"
         f"{' (' + ', '.join(strong[:4]) + ')' if strong else ''}; "
@@ -201,7 +202,7 @@ def heuristic_evaluation(resume_content: dict[str, Any], job: Job, prefs: dict[s
         "compensation_match": compensation_score,
         "proceed_with_application": total >= threshold,
         "reasoning": reasoning,
-        "missing_skills": missing[:12],
+        "missing_skills": [display_skill(s) for s in missing[:12]],
         "strong_matches": strong,
         "method": "heuristic",
     }

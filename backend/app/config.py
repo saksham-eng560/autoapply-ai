@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # ---- Google OAuth / Gmail / Calendar ----
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
-    GOOGLE_REDIRECT_URI: str | None = None  # defaults to {PUBLIC_API_URL}{API_PREFIX}/auth/google/callback
+    GOOGLE_REDIRECT_URI: str | None = None  # defaults to {FRONTEND_URL}{API_PREFIX}/auth/google/callback
     GMAIL_PUBSUB_TOPIC: str | None = None  # projects/<project>/topics/<topic> for push notifications
     GMAIL_PUBSUB_VERIFICATION_TOKEN: str | None = None
     GMAIL_LOOKBACK_DAYS: int = 14
@@ -148,7 +148,8 @@ class Settings(BaseSettings):
 
     @property
     def google_redirect_uri(self) -> str:
-        return self.GOOGLE_REDIRECT_URI or f"{self.PUBLIC_API_URL}{self.API_PREFIX}/auth/google/callback"
+        # Default: through the dashboard's same-origin /api proxy so the session cookie is first-party.
+        return self.GOOGLE_REDIRECT_URI or f"{self.FRONTEND_URL.rstrip('/')}{self.API_PREFIX}/auth/google/callback"
 
     @property
     def google_configured(self) -> bool:

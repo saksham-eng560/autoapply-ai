@@ -3,27 +3,49 @@
 from __future__ import annotations
 
 import io
+import os
 from typing import Any
 from xml.sax.saxutils import escape
 
+import reportlab
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import HRFlowable, KeepTogether, ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import HRFlowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer
 
 from app.schemas.resume_content import ResumeContent
 
 TEMPLATES = ("classic", "modern")
 ACCENTS = {"classic": colors.HexColor("#111827"), "modern": colors.HexColor("#1d4ed8")}
 
+# Embedded TrueType (Bitstream Vera, bundled with ReportLab) so every character — bullets, dashes,
+# accents — extracts as real Unicode text. The 14 standard PDF fonts mangle "•" for ATS parsers.
+FONT, FONT_BOLD = "AAVera", "AAVera-Bold"
+_fonts_registered = False
+
+
+def _register_fonts() -> None:
+    global _fonts_registered
+    if _fonts_registered:
+        return
+    font_dir = os.path.join(os.path.dirname(reportlab.__file__), "fonts")
+    pdfmetrics.registerFont(TTFont(FONT, os.path.join(font_dir, "Vera.ttf")))
+    pdfmetrics.registerFont(TTFont(FONT_BOLD, os.path.join(font_dir, "VeraBd.ttf")))
+    pdfmetrics.registerFont(TTFont("AAVera-Italic", os.path.join(font_dir, "VeraIt.ttf")))
+    pdfmetrics.registerFont(TTFont("AAVera-BoldItalic", os.path.join(font_dir, "VeraBI.ttf")))
+    pdfmetrics.registerFontFamily(FONT, normal=FONT, bold=FONT_BOLD, italic="AAVera-Italic", boldItalic="AAVera-BoldItalic")
+    _fonts_registered = True
+
 
 def _styles(template: str) -> dict[str, ParagraphStyle]:
+    _register_fonts()
     base = getSampleStyleSheet()
     accent = ACCENTS.get(template, ACCENTS["classic"])
-    font = "Helvetica" if template == "modern" else "Times-Roman"
-    bold = "Helvetica-Bold" if template == "modern" else "Times-Bold"
+    font, bold = FONT, FONT_BOLD
     return {
         "name": ParagraphStyle("name", parent=base["Title"], fontName=bold, fontSize=20, leading=24,
                                alignment=TA_CENTER, textColor=accent, spaceAfter=2),
@@ -35,7 +57,8 @@ def _styles(template: str) -> dict[str, ParagraphStyle]:
         "meta": ParagraphStyle("meta", parent=base["Normal"], fontName=font, fontSize=9.5, leading=12,
                                textColor=colors.HexColor("#4b5563")),
         "body": ParagraphStyle("body", parent=base["Normal"], fontName=font, fontSize=10, leading=13),
-        "bullet": ParagraphStyle("bullet", parent=base["Normal"], fontName=font, fontSize=10, leading=12.5),
+        "bullet": ParagraphStyle("bullet", parent=base["Normal"], fontName=font, fontSize=9.5, leading=12.5,
+                                 leftIndent=14, bulletIndent=3, bulletFontName=font, spaceAfter=1),
     }
 
 
@@ -74,11 +97,8 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
         story.append(_p(title.upper(), st["section"]))
         story.append(HRFlowable(width="100%", thickness=0.6, color=colors.HexColor("#9ca3af"), spaceAfter=4))
 
-    def bullets(items: list[str]) -> ListFlowable:
-        return ListFlowable(
-            [ListItem(_p(b, st["bullet"]), leftIndent=12, value="•") for b in items],
-            bulletType="bullet", start="•", leftIndent=12, bulletFontSize=8,
-        )
+    def bullets(items: list[str]) -> list[Paragraph]:
+        return [Paragraph(escape(b), st["bullet"], bulletText="•") for b in items]
 
     if resume.summary:
         section("Summary")
@@ -89,14 +109,14 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
         for exp in resume.experience:
             head = " — ".join(v for v in (exp.title, exp.company) if v)
             meta = "  |  ".join(v for v in (_dates(exp.start_date, exp.end_date), exp.location) if v)
-            block: list[Any] = [_p(head, st["entry"])]
+            header: list[Any] = [_p(head, st["entry"])]
             if meta:
-                block.append(_p(meta, st["meta"]))
-            if exp.bullets:
-                block.append(bullets(exp.bullets))
-            block.append(Spacer(1, 4))
-            story.append(KeepTogether(block[:3]))
-            story.extend(block[3:])
+                header.append(_p(meta, st["meta"]))
+            items = bullets(exp.bullets)
+            # Keep the heading with its first bullet; the rest may flow onto the next page.
+            story.append(KeepTogether(header + items[:1]))
+            story.extend(items[1:])
+            story.append(Spacer(1, 4))
 
     if resume.projects:
         section("Projects")
@@ -114,13 +134,14 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
         section("Education")
         for edu in resume.education:
             degree = ", ".join(v for v in (edu.degree, edu.field) if v)
-            head = " — ".join(v for v in (degree, edu.institution) if v)
+            head = " — ".join(v for v in (edu.institution, degree) if v)
             meta = "  |  ".join(v for v in (_dates(edu.start_date, edu.end_date), f"GPA: {edu.gpa}" if edu.gpa else "") if v)
             block = [_p(head, st["entry"])]
             if meta:
                 block.append(_p(meta, st["meta"]))
-            if edu.highlights:
-                block.append(bullets([h for h in edu.highlights if not h.lower().startswith("gpa")] or edu.highlights))
+            highlights = [h for h in edu.highlights if not h.lower().startswith("gpa")]
+            if highlights:
+                block.extend(bullets(highlights))
             block.append(Spacer(1, 4))
             story.append(KeepTogether(block))
 
@@ -139,13 +160,13 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
 
     if resume.certifications:
         section("Certifications")
-        story.append(bullets([
+        story.extend(bullets([
             " — ".join(v for v in (c.name, c.issuer, c.date) if v) for c in resume.certifications
         ]))
 
     if resume.awards:
         section("Awards")
-        story.append(bullets(resume.awards))
+        story.extend(bullets(resume.awards))
 
     doc.build(story)
     return buf.getvalue()

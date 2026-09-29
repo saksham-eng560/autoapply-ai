@@ -42,12 +42,12 @@ def test_heuristic_evaluation_scores_good_match_high() -> None:
     assert good["match_score"] == sum(good[k] for k in ("skills_match", "experience_match", "industry_match",
                                                          "location_match", "compensation_match"))
     assert good["match_score"] >= 60 and good["proceed_with_application"]
-    assert "python" in good["strong_matches"]
+    assert "Python" in good["strong_matches"]
     bad = evaluate_match(MASTER, make_job(role_title="Senior iOS Engineer",
                                           description="10+ years of Swift, Objective-C, iOS and SwiftUI required.",
                                           salary_max=90000, location="Tokyo, Japan"), PREFS, 60)
     assert bad["match_score"] < good["match_score"]
-    assert "swift" in bad["missing_skills"]
+    assert "Swift" in bad["missing_skills"]
 
 
 def test_llm_evaluation_clamps_and_sums(fake_llm) -> None:

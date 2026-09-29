@@ -24,6 +24,7 @@ from app.services.llm import LLMError, get_llm, render_prompt
 from app.services.text_utils import (
     STOPWORDS,
     canonical_skill,
+    display_skill,
     extract_skills,
     normalize_text,
     tokenize,
@@ -193,11 +194,11 @@ def heuristic_tailor(master: dict[str, Any], job: Job) -> tuple[dict[str, Any], 
 
     matched = [s for s in jd_skills if s in {canonical_skill(x) for x in resume.skills.all()} or s in normalize_text(resume.full_text())]
     if resume.summary and matched:
-        focus = ", ".join(matched[:4])
+        focus = ", ".join(display_skill(m) for m in matched[:4])
         out["summary"] = f"{resume.summary.rstrip('.')}. Targeting the {job.role_title} role with hands-on experience in {focus}."
         changes.append("Extended summary to reference the target role and matching skills")
     elif not resume.summary and matched:
-        out["summary"] = f"Candidate for {job.role_title} with experience in {', '.join(matched[:5])}."
+        out["summary"] = f"Candidate for {job.role_title} with experience in {', '.join(display_skill(m) for m in matched[:5])}."
         changes.append("Added a targeted summary built from existing skills")
     return normalize_resume(out), changes
 

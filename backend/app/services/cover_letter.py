@@ -11,7 +11,7 @@ from app.schemas.resume_content import ResumeContent
 from app.services import llm_schemas
 from app.services.job_matcher import job_skills, job_text
 from app.services.llm import LLMError, get_llm, render_prompt
-from app.services.text_utils import canonical_skill, extract_skills, normalize_text, truncate
+from app.services.text_utils import canonical_skill, display_skill, extract_skills, normalize_text, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def heuristic_cover_letter(resume_content: dict[str, Any], job: Job) -> str:
     name = resume.personal_info.name or "the candidate"
     required = job_skills(job)
     have = {canonical_skill(s) for s in resume.skills.all()} | set(extract_skills(resume.full_text()))
-    matched = [s for s in required if s in have][:4]
+    matched = [display_skill(s) for s in required if s in have][:4]
     tone = detect_tone(job)
 
     bullets: list[tuple[int, str, str]] = []

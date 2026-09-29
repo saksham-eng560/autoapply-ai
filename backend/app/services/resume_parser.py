@@ -50,6 +50,11 @@ def extract_text(filename: str, data: bytes) -> str:
     else:
         raise ResumeParseError(f"Unsupported file type. Upload one of: {', '.join(SUPPORTED_EXTENSIONS)}")
     text = text.replace("\x00", "")
+    # Bullet glyphs from various PDF producers (Symbol/Wingdings private-use, ReportLab std fonts)
+    text = re.sub(r"[\x7f\uf0b7\uf0a7\uf076\uf0d8\u25cf\u25aa\u25e6\u2023\u2043]", "•", text)
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    # A bullet glyph alone on its line belongs to the next line
+    text = re.sub(r"(?m)^[ \t]*•[ \t]*\n(?=\S)", "• ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) < 50:
@@ -182,6 +187,13 @@ def _parse_entries(lines: list[str], kind: str) -> list[dict[str, Any]]:
     for line in lines:
         is_bullet = bool(_BULLET.match(line))
         dates = _DATE_RANGE.search(line)
+        if (not is_bullet and dates and current is not None and not current["start_date"] and not current["bullets"]):
+            # "Jan 2022 – Present | San Francisco, CA" directly under a "Title — Company" header
+            rest = _DATE_RANGE.sub("", line).strip(" |,-–—")
+            current["start_date"], current["end_date"] = dates.group(1), dates.group(2)
+            if rest and not current["location"]:
+                current["location"] = rest
+            continue
         if not is_bullet and (dates or current is None or (current and current.get("bullets"))):
             header = _DATE_RANGE.sub("", line).strip(" |,-–—")
             if "|" in header:

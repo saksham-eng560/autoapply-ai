@@ -26,14 +26,20 @@ def test_heuristic_parse_extracts_sections() -> None:
 
 
 def test_pdf_roundtrip_is_ats_parseable() -> None:
+    """Our generated PDFs must re-parse losslessly: clean Unicode bullets, same structure."""
     parsed = heuristic_parse(SAMPLE_RESUME_TEXT)
     for template in ("classic", "modern"):
         pdf = render_resume_pdf(parsed, template=template)
         assert pdf.startswith(b"%PDF")
         text = extract_text("resume.pdf", pdf)
+        assert "\x7f" not in text and "• Built REST APIs" in text
         reparsed = heuristic_parse(text)
         assert reparsed["personal_info"]["email"] == "jane.doe@example.com"
-        assert "Acme Corp" in text and "FastAPI" in text
+        key = lambda r: [(e["title"], e["company"], e["start_date"], e["end_date"], e["location"], e["bullets"])  # noqa: E731
+                         for e in r["experience"]]
+        assert key(reparsed) == key(parsed)
+        assert reparsed["education"][0]["institution"] == "University of California, Berkeley"
+        assert reparsed["education"][0]["degree"] == "B.S. Computer Science"
 
 
 def test_cover_letter_pdf() -> None:
