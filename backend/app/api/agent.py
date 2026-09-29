@@ -47,7 +47,7 @@ def agent_status(user: CurrentUser, db: DB) -> dict:
     running = db.scalars(select(AgentRun).where(AgentRun.user_id == user.id, AgentRun.status == "running")
                          .order_by(AgentRun.started_at.desc()).limit(5)).all()
     prefs = user.prefs
-    interval = int(prefs.get("scan_interval_hours") or 6)
+    interval = int(prefs.get("scan_interval_hours") or 3)
     next_scan = (user.last_scan_at + timedelta(hours=interval)).isoformat() if user.last_scan_at and prefs.get("scan_enabled", True) else None
     return {
         "has_master_resume": get_master_resume(db, user) is not None,

@@ -36,7 +36,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "keywords_exclude": [],
     "posted_within_days": 14,
     "scan_enabled": True,
-    "scan_interval_hours": 6,
+    "scan_interval_hours": 3,
     "platforms": ["greenhouse", "lever", "ashby", "workday", "linkedin", "generic"],
     "sources": {
         # ATS boards to crawl directly (public APIs, no login needed)

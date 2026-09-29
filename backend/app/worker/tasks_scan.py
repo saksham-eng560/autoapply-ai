@@ -41,7 +41,7 @@ def scan_due_users() -> int:
             prefs = user.prefs
             if not prefs.get("scan_enabled", True):
                 continue
-            interval = timedelta(hours=int(prefs.get("scan_interval_hours") or 6))
+            interval = timedelta(hours=int(prefs.get("scan_interval_hours") or 3))
             if user.last_scan_at and now - user.last_scan_at < interval:
                 continue
             running = db.scalar(select(AgentRun.id).where(AgentRun.user_id == user.id, AgentRun.run_type == "scan",
