@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Seed a demo account with realistic data so every dashboard view has something to show.
 
-    python scripts/seed_db.py                      # demo@autoapply.local / demo-password-123
+    python scripts/seed_db.py                      # demo@example.com / demo-password-123
     python scripts/seed_db.py --email me@x.com --password secret123 --reset
 """
 
@@ -98,7 +98,7 @@ PIPELINE = [ApplicationStatus.MATCHED, ApplicationStatus.PREPARING, ApplicationS
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--email", default="demo@autoapply.local")
+    parser.add_argument("--email", default="demo@example.com")
     parser.add_argument("--password", default="demo-password-123")
     parser.add_argument("--reset", action="store_true", help="delete the account first if it exists")
     args = parser.parse_args()

@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
-    SMTP_FROM: str = "AutoApply AI <no-reply@autoapply.local>"
+    SMTP_FROM: str = "AutoApply AI <no-reply@example.com>"
     SMTP_STARTTLS: bool = True
     DISCORD_WEBHOOK_URL: str | None = None
     SLACK_WEBHOOK_URL: str | None = None

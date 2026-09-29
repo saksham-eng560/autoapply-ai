@@ -1228,65 +1228,68 @@ autoapply-ai/
 
 ## 11. Development Phases & Milestones
 
+> **Status:** all six phases are implemented in this repository — see [README.md](README.md) for how to run it.
+> Deviations from the original plan are noted inline.
+
 ### Phase 1: Foundation (Weeks 1–3)
-- [ ] Project scaffolding (monorepo setup, Docker Compose)
-- [ ] PostgreSQL database + Alembic migrations
-- [ ] User authentication (Clerk + Google OAuth)
-- [ ] Master resume upload & parsing (PDF → structured JSON via LLM)
-- [ ] Basic Next.js dashboard skeleton
-- [ ] User preferences settings page
+- [x] Project scaffolding (monorepo setup, Docker Compose)
+- [x] PostgreSQL database + Alembic migrations
+- [x] User authentication (Clerk + Google OAuth) — *built-in e-mail/password auth (bcrypt + JWT httpOnly cookies) instead of Clerk, so the app is fully self-hostable; Google sign-in included*
+- [x] Master resume upload & parsing (PDF → structured JSON via LLM) — *PDF, DOCX and TXT; heuristic parser when no API key is set*
+- [x] Basic Next.js dashboard skeleton
+- [x] User preferences settings page
 
 ### Phase 2: Job Discovery Engine (Weeks 4–6)
-- [ ] Abstract scraper interface
-- [ ] LinkedIn job scraper (Playwright + session cookies)
-- [ ] Greenhouse scraper (API-first)
-- [ ] Lever scraper (API-first)
-- [ ] Indeed/Glassdoor scrapers
-- [ ] Job deduplication logic
-- [ ] pgvector embeddings for semantic matching
-- [ ] LLM job match evaluation pipeline
-- [ ] Celery Beat scheduled scanning
+- [x] Abstract scraper interface
+- [x] LinkedIn job scraper (Playwright + session cookies)
+- [x] Greenhouse scraper (API-first)
+- [x] Lever scraper (API-first) — *plus Ashby, Workday and generic career pages (JSON-LD)*
+- [x] Indeed/Glassdoor scrapers — *plus Wellfound*
+- [x] Job deduplication logic
+- [x] pgvector embeddings for semantic matching
+- [x] LLM job match evaluation pipeline
+- [x] Celery Beat scheduled scanning
 
 ### Phase 3: The Auto-Submitter (Weeks 7–10)
-- [ ] Resume tailoring LLM pipeline
-- [ ] Cover letter generator
-- [ ] PDF generation engine (JSON → polished resume PDF)
-- [ ] Form filler engine with field mapping
-- [ ] LinkedIn Easy Apply submitter
-- [ ] Greenhouse form submitter
-- [ ] Lever form submitter
-- [ ] Workday form submitter (complex — multi-page)
-- [ ] "Pause & Approve" workflow with screenshots
-- [ ] Approval notification system (WebSocket + email)
-- [ ] Dashboard: application review & approval UI
+- [x] Resume tailoring LLM pipeline — *with a truthfulness guard that reverts invented facts*
+- [x] Cover letter generator
+- [x] PDF generation engine (JSON → polished resume PDF)
+- [x] Form filler engine with field mapping
+- [x] LinkedIn Easy Apply submitter
+- [x] Greenhouse form submitter
+- [x] Lever form submitter
+- [x] Workday form submitter (complex — multi-page)
+- [x] "Pause & Approve" workflow with screenshots
+- [x] Approval notification system (WebSocket + email)
+- [x] Dashboard: application review & approval UI
 
 ### Phase 4: Communication & Calendar (Weeks 11–13)
-- [ ] Gmail API integration (OAuth + Pub/Sub webhooks)
-- [ ] Email intent parsing (LLM-powered)
-- [ ] Auto-labeling recruiter emails
-- [ ] Google Calendar event creation
-- [ ] Interview prep note generation
-- [ ] Interview reminder system (24h + 1h before)
-- [ ] Dashboard: communications view
-- [ ] Dashboard: interviews/calendar view
+- [x] Gmail API integration (OAuth + Pub/Sub webhooks) — *with polling fallback*
+- [x] Email intent parsing (LLM-powered)
+- [x] Auto-labeling recruiter emails
+- [x] Google Calendar event creation
+- [x] Interview prep note generation
+- [x] Interview reminder system (24h + 1h before)
+- [x] Dashboard: communications view
+- [x] Dashboard: interviews/calendar view
 
 ### Phase 5: LinkedIn Sync & Intelligence (Weeks 14–15)
-- [ ] Chrome extension for session cookie sync
-- [ ] LinkedIn profile change detection
-- [ ] Master resume sync from LinkedIn updates
-- [ ] Application status analytics
-- [ ] Success rate dashboards
-- [ ] Agent run history & audit logs
+- [x] Chrome extension for session cookie sync
+- [x] LinkedIn profile change detection
+- [x] Master resume sync from LinkedIn updates — *changes are suggested for review, never applied silently*
+- [x] Application status analytics
+- [x] Success rate dashboards
+- [x] Agent run history & audit logs
 
 ### Phase 6: Hardening & Scale (Weeks 16–17)
-- [ ] Residential proxy integration
-- [ ] Human behavior emulation (typing speed, mouse movements)
-- [ ] CAPTCHA handling (2Captcha integration)
-- [ ] Comprehensive error handling & retry logic
-- [ ] Rate limiting per platform
-- [ ] Security audit (encryption, token rotation, RLS)
-- [ ] Load testing with multiple concurrent users
-- [ ] E2E test suite
+- [x] Residential proxy integration
+- [x] Human behavior emulation (typing speed, mouse movements)
+- [x] CAPTCHA handling (2Captcha integration) — *and Anti-Captcha*
+- [x] Comprehensive error handling & retry logic
+- [x] Rate limiting per platform
+- [x] Security audit (encryption, token rotation, RLS) — *AES-256-GCM at rest, short-lived scoped tokens, OAuth refresh; tenant isolation is enforced in every query (application-level) rather than Postgres RLS*
+- [x] Load testing with multiple concurrent users — *`backend/tests/load/locustfile.py`*
+- [x] E2E test suite
 
 ---
 

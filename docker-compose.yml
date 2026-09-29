@@ -22,6 +22,8 @@ x-backend: &backend
     CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   volumes:
     - storage:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"  # lets the agent reach the demo site on your machine (Linux too)
   depends_on:
     postgres:
       condition: service_healthy

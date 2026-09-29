@@ -19,16 +19,27 @@ BACKEND = _ROOT / "backend" if (_ROOT / "backend" / "app").is_dir() else _ROOT
 sys.path.insert(0, str(BACKEND))
 
 
+MIGRATION_LOCK_ID = 7_214_553_901  # arbitrary constant shared by every replica
+
+
 def upgrade() -> None:
+    from sqlalchemy import text
+
     from app.config import settings
-    from app.core.database import create_all, wait_for_db
+    from app.core.database import create_all, engine, wait_for_db
 
     wait_for_db()
     if settings.is_sqlite:
         create_all()
         print("SQLite: tables created")
         return
-    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, check=True)
+    # Replicas starting together (API scale-out, rolling deploys) take turns; later ones find nothing to do.
+    with engine.connect() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:id)"), {"id": MIGRATION_LOCK_ID})
+        try:
+            subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, check=True)
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": MIGRATION_LOCK_ID})
 
 
 def check() -> None:
