@@ -138,3 +138,16 @@ def test_cover_letter_heuristic_is_grounded() -> None:
     assert text.startswith("Dear Hiring Team,") and text.rstrip().endswith("Jane Doe")
     assert "Stripe" in text and "Acme Corp" in text
     assert 60 <= len(text.split()) <= 350
+
+
+def test_tailored_resume_keeps_only_the_most_relevant_projects() -> None:
+    master = MASTER.model_dump() if hasattr(MASTER, "model_dump") else dict(MASTER)
+    filler = [{"name": f"Poetry site {i}", "description": "Static poems.", "technologies": ["HTML"], "url": ""} for i in range(5)]
+    relevant = {"name": "Deploy bot", "description": "Automated Docker and Kubernetes rollouts.",
+                "technologies": ["Docker", "Kubernetes"], "url": ""}
+    master["projects"] = [*filler, relevant]
+    result = tailor_resume(master, make_job(description="Kubernetes and Docker expert needed."))
+    names = [p["name"] for p in result["tailored_resume"]["projects"]]
+    assert len(names) == 3
+    assert names[0] == "Deploy bot"
+    assert any("most relevant projects" in c for c in result["changes_made"])

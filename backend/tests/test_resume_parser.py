@@ -3,8 +3,15 @@ import io
 import pytest
 
 from app.schemas.resume_content import ResumeContent, normalize_resume
-from app.services.pdf_generator import render_cover_letter_pdf, render_resume_pdf
-from app.services.resume_parser import ResumeParseError, extract_text, heuristic_parse, parse_resume_text
+from app.services.pdf_generator import _render_resume, render_cover_letter_pdf, render_resume_pdf
+from app.services.resume_parser import (
+    ResumeParseError,
+    _join_wrapped_lines,
+    _looks_word_per_line,
+    extract_text,
+    heuristic_parse,
+    parse_resume_text,
+)
 from tests.conftest import SAMPLE_RESUME_TEXT
 
 
@@ -81,3 +88,37 @@ def test_normalize_resume_cleans_input() -> None:
     assert data["skills"]["technical"] == ["Python", "SQL"]
     assert data["experience"][0]["bullets"] == ["one", "two"]
     assert ResumeContent.model_validate(data).skills_text().startswith("Python")
+
+
+def test_word_per_line_pdf_text_is_detected():
+    words = "Architected a hybrid on-device and serverless AI system using Gemma for field workers".split()
+    assert _looks_word_per_line("\n \n".join(words * 4))
+    assert not _looks_word_per_line(SAMPLE_RESUME_TEXT)
+
+
+def test_wrapped_lines_are_rejoined():
+    lines = ["PROJECTS", "• Built a pipeline that parses voice", "transcripts of home visits.", "", "SKILLS"]
+    assert _join_wrapped_lines(lines) == "PROJECTS\n• Built a pipeline that parses voice transcripts of home visits.\nSKILLS"
+
+
+def test_multiline_project_description_renders_as_bullets():
+    content = normalize_resume({"personal_info": {"name": "A B"}, "projects": [
+        {"name": "Tower", "description": "Built the API.\nAdded the dashboard."}]})
+    pdf = render_resume_pdf(ResumeContent.model_validate(content))
+    from pypdf import PdfReader
+
+    text = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
+    assert "• Built the API." in text or "•Built the API." in text
+
+
+def test_resume_slightly_over_one_page_is_compacted() -> None:
+    from pypdf import PdfReader
+
+    bullet = "Built and shipped a production feature end to end with measurable impact on users and reliability."
+    for n in range(10, 80):
+        content = {"personal_info": {"name": "A B"}, "experience": [{"company": "Co", "title": "Engineer", "bullets": [bullet] * n}]}
+        _, pages = _render_resume(content, "classic", "letter", compact=False)
+        if pages == 2:
+            break
+    assert pages == 2
+    assert len(PdfReader(io.BytesIO(render_resume_pdf(content))).pages) == 1

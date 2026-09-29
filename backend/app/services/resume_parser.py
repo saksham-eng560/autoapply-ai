@@ -22,6 +22,26 @@ class ResumeParseError(Exception):
 
 
 # --------------------------------------------------------------------------- text extraction
+def _looks_word_per_line(text: str) -> bool:
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 40:
+        return False
+    return sum(len(ln.split()) for ln in lines) / len(lines) < 2.0
+
+
+def _join_wrapped_lines(lines: Any) -> str:
+    """Re-join visually wrapped lines: a line starting in lower case continues the previous one."""
+    out: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        if out and line[0].islower():
+            out[-1] = f"{out[-1]} {line}"
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def extract_text(filename: str, data: bytes) -> str:
     name = (filename or "").lower()
     if name.endswith(".pdf") or data[:4] == b"%PDF":
@@ -30,9 +50,14 @@ def extract_text(filename: str, data: bytes) -> str:
         try:
             reader = PdfReader(io.BytesIO(data))
             pages = [page.extract_text() or "" for page in reader.pages]
+            text = "\n".join(pages)
+            if _looks_word_per_line(text):
+                # Some exporters (Google Docs, Canva) emit one text run per word; layout mode rebuilds the lines.
+                pages = [page.extract_text(extraction_mode="layout") or "" for page in reader.pages]
+                text = _join_wrapped_lines(
+                    re.sub(r"[ \t]{2,}", " ", line).strip() for page in pages for line in page.splitlines())
         except Exception as exc:
             raise ResumeParseError(f"Could not read PDF: {exc}") from exc
-        text = "\n".join(pages)
     elif name.endswith(".docx"):
         import docx
 
