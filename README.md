@@ -26,7 +26,6 @@ with prep notes, and shows you what is working.
 - [Quick start (Docker)](#quick-start-docker)
 - [Try the whole loop safely with the demo careers site](#try-the-whole-loop-safely-with-the-demo-careers-site)
 - [Using it for real](#using-it-for-real)
-- [Configuration](#configuration)
 - [Connect Gmail and Google Calendar](#connect-gmail-and-google-calendar)
 - [LinkedIn and the Chrome extension](#linkedin-and-the-chrome-extension)
 - [Local development without Docker](#local-development-without-docker)
@@ -130,16 +129,12 @@ Requirements: Docker with Compose v2, about 4 GB RAM free.
 ```bash
 git clone https://github.com/saksham-eng560/autoapply-ai.git
 cd autoapply-ai
-cp .env.example .env
+scripts/init-env.sh      # creates a private .env with freshly generated secrets
 ```
 
-Edit `.env` and set at least:
-
-```bash
-SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(48))">
-ENCRYPTION_KEY=<python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())">
-ANTHROPIC_API_KEY=sk-ant-...        # optional but strongly recommended
-```
+Open `.env` in a text editor and paste your Anthropic API key where indicated. This is optional but
+strongly recommended. Your keys stay in `.env` on your own machine, and git is set up to never commit
+that file. Don't share it or paste keys on the command line.
 
 Then start everything:
 
@@ -204,32 +199,6 @@ python3 scripts/demo_site.py --host 0.0.0.0     # no dependencies; serves :8765
 Use **Scan for jobs now**, or let the scheduler scan every `scan_interval_hours`. Prepared
 applications arrive in **Needs approval**, and you get a notification for each one.
 
-## Configuration
-
-All settings are environment variables. [`.env.example`](.env.example) documents every one. The
-important ones:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `SECRET_KEY` | *(dev value)* | JWT signing. **Required in production.** |
-| `ENCRYPTION_KEY` | derived from `SECRET_KEY` | AES-256-GCM key for OAuth tokens and cookies. Set it explicitly in production. |
-| `ANTHROPIC_API_KEY` | — | Claude for parsing, matching, tailoring, cover letters, answers, e-mail, interview prep |
-| `ANTHROPIC_MODEL` / `ANTHROPIC_EFFORT` | `claude-opus-5-5` / `medium` | Model and reasoning effort |
-| `OPENAI_API_KEY` | — | Optional secondary provider (automatic failover) and embeddings |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Gmail + Calendar + "Sign in with Google" |
-| `FRONTEND_URL` | `http://localhost:3000` | Public dashboard URL (OAuth redirects, links in e-mails) |
-| `ALLOW_REGISTRATION` | `true` | Set to `false` after creating your account |
-| `AUTO_STAGE_APPLICATIONS` | `true` | Fill forms automatically after tailoring (always pauses for approval) |
-| `SUBMISSION_DRY_RUN` | `false` | `true` = never click the final submit button |
-| `BROWSER_HEADLESS` / `HUMAN_EMULATION` | `true` / `true` | Browser behaviour |
-| `PROXY_URLS` | — | Comma-separated proxies (`http://user:pass@host:port`), rotated per session |
-| `CAPTCHA_PROVIDER` / `CAPTCHA_API_KEY` | `2captcha` / — | CAPTCHA solving |
-| `STORAGE_BACKEND` | `local` | `s3` for AWS S3, Cloudflare R2 or MinIO (`S3_*` variables) |
-| `SMTP_*`, `DISCORD_WEBHOOK_URL`, `SLACK_WEBHOOK_URL` | — | Notification channels (Discord and Slack can also be set per user in Settings) |
-| `CELERY_TASK_ALWAYS_EAGER` | `false` | Run background jobs in-process (no Redis or worker needed; for development) |
-| `SENTRY_DSN` | — | Error tracking |
-| `DATA_RETENTION_DAYS` | `730` | Automatic clean-up of closed applications (and their files) older than this |
-
 ## Connect Gmail and Google Calendar
 
 1. In the [Google Cloud console](https://console.cloud.google.com/), create a project and enable the
@@ -245,8 +214,9 @@ important ones:
    ```
    {FRONTEND_URL}/api/v1/auth/google/callback      e.g. http://localhost:3000/api/v1/auth/google/callback
    ```
-4. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`, restart (`docker compose up -d`), then
-   go to **Settings → Google → Connect**.
+4. Paste the client ID and client secret into their places in your `.env` file. Keep the secret
+   private and never commit it. Restart (`docker compose up -d`), then go to
+   **Settings → Google → Connect**.
 
 **Optional: real-time Gmail push** (otherwise the inbox is polled every `EMAIL_POLL_MINUTES`). This
 needs a public HTTPS URL.
@@ -326,8 +296,7 @@ expire. That's enough to run everything 24/7 at no cost.
    ```bash
    chmod 600 ~/Downloads/ssh-key-*.key
    ssh -i ~/Downloads/ssh-key-*.key ubuntu@<PUBLIC_IP>
-   curl -fsSL https://raw.githubusercontent.com/saksham-eng560/autoapply-ai/main/scripts/server-setup.sh \
-     | ANTHROPIC_API_KEY=sk-ant-... bash
+   curl -fsSL https://raw.githubusercontent.com/saksham-eng560/autoapply-ai/main/scripts/server-setup.sh | bash
    ```
    [`scripts/server-setup.sh`](scripts/server-setup.sh) does the rest:
    - installs Docker and opens the server's own firewall (Oracle's Ubuntu image blocks everything
@@ -337,7 +306,11 @@ expire. That's enough to run everything 24/7 at no cost.
 
    It prints your URL when it's done. Without a `DOMAIN`, the URL is
    `https://<ip-with-dashes>.sslip.io`, a free hostname that points at your server.
-5. **Open the URL and create your account.** Then turn off sign-ups as the script's output shows.
+5. **Add your API key privately.** On the server, run `nano ~/autoapply-ai/.env`, paste your
+   Anthropic key into its line, and save. Then restart:
+   `cd ~/autoapply-ai && docker compose -f docker-compose.prod.yml up -d`. Editing the file keeps the
+   key out of your shell history and out of git. The file is readable only by your user.
+6. **Open the URL and create your account.** Then turn off sign-ups as the script's output shows.
 
 Useful follow-ups:
 - **Your own domain**: point its DNS A record at the server, then re-run the script with
@@ -357,7 +330,7 @@ run the same `server-setup.sh` command as above, or do it by hand:
 
 ```bash
 # DNS: point your domain at the server, then:
-cp .env.example .env     # set DOMAIN, SECRET_KEY, ENCRYPTION_KEY, POSTGRES_PASSWORD, API keys
+scripts/init-env.sh      # private .env with generated secrets; then add your domain and API keys with an editor
 docker compose -f docker-compose.prod.yml up -d --build      # or: make prod-up
 ```
 
@@ -451,9 +424,12 @@ PLAN.md             the full design this implementation follows
 - **Your data**: **Settings → Export your data** gives you everything as JSON. **Delete my account**
   removes the database rows, stored files and tokens. Closed applications are purged after `DATA_RETENTION_DAYS`.
 - **Rate limits**: per-platform application limits and randomized pacing protect your accounts.
-- **Production checklist**: set `SECRET_KEY`, `ENCRYPTION_KEY`, `COOKIE_SECURE=true` and
-  `ALLOW_REGISTRATION=false`, and use HTTPS. The production Compose file requires the keys and sets up
-  HTTPS and secure cookies; you set `ALLOW_REGISTRATION=false` after signing up.
+- **Secrets**: all keys live only in `.env` on your machine or server. That file is created with
+  permissions for your user only and is excluded from git. Never paste keys into the README, issues,
+  chat or the command line. If a key is ever exposed, revoke it at the provider and put a new one
+  in `.env`.
+- **Production**: the setup scripts generate strong secrets and enable HTTPS and secure cookies.
+  Turn off sign-ups once your own account exists.
 
 ## Responsible use
 
@@ -478,7 +454,7 @@ approved**.
 | Dashboard shows "degraded" at `/api/health` | The API isn't reachable from the dashboard. Check `docker compose logs api` and that `BACKEND_URL` points to it. |
 | Nothing gets prepared after a scan | Upload a master resume and check your threshold. The **Jobs** page shows each job's score and why it was skipped, and **Agent Logs** shows each run step by step. |
 | "Required answer(s) are empty" at approval | Eligibility questions are never guessed. Answer them once and they're remembered (also editable in **Settings → Saved answers**). |
-| Application fails with a CAPTCHA or bot block | Set `CAPTCHA_API_KEY` and residential `PROXY_URLS`, or use **Mark as applied** after applying manually through the form link. |
+| Application fails with a CAPTCHA or bot block | Add a CAPTCHA-solver key and residential proxies to `.env`, or use **Mark as applied** after applying manually through the form link. |
 | LinkedIn session invalid | Log in to LinkedIn in Chrome and click **Sync LinkedIn session** in the extension. |
 | Google disconnects every 7 days | Your OAuth consent screen is in Testing mode (see [Connect Gmail and Google Calendar](#connect-gmail-and-google-calendar)). |
 | Chromium crashes in Docker | Give the worker more shared memory (`shm_size`, 1–2 GB is already set) and RAM. |

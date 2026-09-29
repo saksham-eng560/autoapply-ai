@@ -8,7 +8,6 @@
 # Optional environment variables (put them before `bash`, e.g. `... | DOMAIN=jobs.example.com bash`):
 #   DOMAIN             your domain (its DNS A record must point to this server).
 #                      Default: <public-ip>.sslip.io, a free hostname that works with HTTPS out of the box.
-#   ANTHROPIC_API_KEY  enables Claude (recommended); can also be added to ~/autoapply-ai/.env later.
 #   BRANCH             git branch to deploy (default: main).
 #   REPO_URL           git repository (default: the public AutoApply AI repo).
 #   APP_DIR            install directory (default: ~/autoapply-ai).
@@ -137,8 +136,9 @@ wait_until_live() {
 
 Next steps:
   1. Open https://$domain and create your account.
-  2. Then block other sign-ups:  cd $APP_DIR && sed -i 's/^ALLOW_REGISTRATION=.*/ALLOW_REGISTRATION=false/' .env && docker compose -f docker-compose.prod.yml up -d
-  3. Add ANTHROPIC_API_KEY / GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET to $APP_DIR/.env the same way (see README).
+  2. Then block other sign-ups:  cd $APP_DIR && sed -i "s/^ALLOW_REGISTRATION=.*/ALLOW_REGISTRATION=false/" .env && docker compose -f docker-compose.prod.yml up -d
+  3. Add your API keys privately with an editor (never on the command line):
+       nano $APP_DIR/.env    then:  cd $APP_DIR && docker compose -f docker-compose.prod.yml up -d
 Logs:    cd $APP_DIR && docker compose -f docker-compose.prod.yml logs -f
 Update:  re-run this script
 EOF
