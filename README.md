@@ -303,9 +303,57 @@ backend/.venv/bin/python scripts/migrate.py --reembed       # after changing EMB
 
 ## Deployment
 
-### Single server with automatic HTTPS (simplest)
+### Free, always on: Oracle Cloud "Always Free"
 
-This works on any VPS with 2+ vCPU and 4+ GB RAM, with Docker installed.
+Oracle's Always Free tier includes an ARM server with up to 4 cores and 24 GB of RAM that doesn't
+expire. That's enough to run everything 24/7 at no cost.
+
+1. **Create an account** at https://www.oracle.com/cloud/free/. A card is needed for verification
+   but isn't charged. Your *home region* can't be changed later, so pick one near you.
+2. **Create the server.** Go to **Compute → Instances → Create instance** and set:
+   - **Image**: Canonical Ubuntu 24.04.
+   - **Shape**: *Change shape → Ampere → VM.Standard.A1.Flex*, 4 OCPUs and 24 GB memory. It's
+     labelled "Always Free-eligible".
+   - **Networking**: keep "Create new virtual cloud network" and "Assign a public IPv4 address".
+   - **SSH keys**: *Generate a key pair* and **download the private key**.
+
+   If you see "Out of capacity", try another availability domain, try 2 OCPUs / 12 GB, or retry
+   later. This is common for free ARM servers.
+3. **Open ports 80 and 443.** On the instance page, click the subnet, then its **Security List**,
+   then **Add Ingress Rules**. Set source CIDR `0.0.0.0/0`, IP protocol TCP, and destination port
+   range `80,443`.
+4. **Connect and run the setup script.** The instance page shows the public IP address.
+   ```bash
+   chmod 600 ~/Downloads/ssh-key-*.key
+   ssh -i ~/Downloads/ssh-key-*.key ubuntu@<PUBLIC_IP>
+   curl -fsSL https://raw.githubusercontent.com/saksham-eng560/autoapply-ai/main/scripts/server-setup.sh \
+     | ANTHROPIC_API_KEY=sk-ant-... bash
+   ```
+   [`scripts/server-setup.sh`](scripts/server-setup.sh) does the rest:
+   - installs Docker and opens the server's own firewall (Oracle's Ubuntu image blocks everything
+     except SSH);
+   - generates fresh secrets into `~/autoapply-ai/.env`;
+   - builds and starts the stack with HTTPS. The first build takes about 10 minutes.
+
+   It prints your URL when it's done. Without a `DOMAIN`, the URL is
+   `https://<ip-with-dashes>.sslip.io`, a free hostname that points at your server.
+5. **Open the URL and create your account.** Then turn off sign-ups as the script's output shows.
+
+Useful follow-ups:
+- **Your own domain**: point its DNS A record at the server, then re-run the script with
+  `DOMAIN=jobs.example.com` in front of `bash`. A real domain is recommended before connecting
+  Google.
+- **Changing settings**: edit `~/autoapply-ai/.env`, then run
+  `docker compose -f docker-compose.prod.yml up -d` in that folder.
+- **Updating**: re-run the script.
+- **Idle servers**: Oracle may reclaim Always Free servers that stay almost completely idle for a
+  week. Scheduled scans normally keep the server active enough. Upgrading the account to
+  Pay-As-You-Go removes this risk, and Always Free resources stay free.
+
+### Any other server with automatic HTTPS
+
+This works on any Ubuntu VPS with 2+ vCPU and 4+ GB RAM (Hetzner, DigitalOcean, Lightsail…). Either
+run the same `server-setup.sh` command as above, or do it by hand:
 
 ```bash
 # DNS: point your domain at the server, then:
