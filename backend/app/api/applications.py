@@ -112,11 +112,13 @@ def update_application(application_id: str, body: ApplicationUpdate, user: Curre
 def approve(application_id: str, body: ApproveRequest, user: CurrentUser, db: DB) -> dict:
     """Explicit user approval — the ONLY path that leads to a submission."""
     app = _get(db, user.id, application_id)
+    edited = [a.model_dump(exclude_none=True) for a in body.custom_answers] if body.custom_answers is not None else None
+    missing = [a.get("question") for a in (edited if edited is not None else app.custom_answers or [])
+               if a.get("required") and not str(a.get("answer") or "").strip()]
+    if missing:
+        raise HTTPException(422, "Answer the required question(s) before approving: " + "; ".join(str(m) for m in missing))
     try:
-        orch.approve_application(
-            db, app, cover_letter=body.cover_letter,
-            custom_answers=[a.model_dump(exclude_none=True) for a in body.custom_answers] if body.custom_answers is not None else None,
-        )
+        orch.approve_application(db, app, cover_letter=body.cover_letter, custom_answers=edited)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return _detail(db, app)

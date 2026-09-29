@@ -34,7 +34,7 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
     { ok: !!app.tailored_resume_pdf_url, text: "Tailored resume PDF attached" },
     { ok: !!coverLetter.trim() || !app.job, text: coverLetter.trim() ? `Cover letter (${coverLetter.trim().split(/\s+/).length} words)` : "No cover letter" },
     { ok: flagged.length === 0, text: flagged.length ? `${flagged.length} answer(s) were flagged for review — make sure you checked them` : "All answers reviewed" },
-    { ok: emptyRequired.length === 0, text: emptyRequired.length ? `${emptyRequired.length} required answer(s) are empty` : "Required answers filled" },
+    { ok: emptyRequired.length === 0, text: emptyRequired.length ? `${emptyRequired.length} required answer(s) are empty — fill them in before approving` : "Required answers filled" },
     { ok: unmapped.length === 0, text: unmapped.length ? `${unmapped.length} required form field(s) could not be filled automatically` : "Form fields filled" },
   ];
 
@@ -44,7 +44,7 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="success" onClick={approve} disabled={!confirmed} loading={loading}><ShieldCheck /> Approve & submit</Button>
+          <Button variant="success" onClick={approve} disabled={!confirmed || emptyRequired.length > 0} loading={loading}><ShieldCheck /> Approve & submit</Button>
         </>
       }>
       <ul className="space-y-2">
@@ -55,6 +55,11 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
           </li>
         ))}
       </ul>
+      {emptyRequired.length > 0 && (
+        <ul className="mt-2 list-disc space-y-1 pl-10 text-sm text-muted-foreground">
+          {emptyRequired.map((a) => <li key={a.field_id || a.question}>{a.question}</li>)}
+        </ul>
+      )}
       {app.needs_manual_review && app.manual_review_reason && (
         <p className="mt-4 rounded-md bg-warning/10 p-3 text-sm text-warning-foreground dark:text-warning">{app.manual_review_reason}</p>
       )}

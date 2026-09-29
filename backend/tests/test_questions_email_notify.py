@@ -13,7 +13,7 @@ from app.models.user import Notification, User
 from app.services.email_parser import EmailMessage, heuristic_parse, is_job_related, match_application
 from app.services.gmail_service import parse_gmail_message, process_message
 from app.services.notifier import notify
-from app.services.question_answerer import answer_questions, choose_option
+from app.services.question_answerer import answer_questions, choose_option, learnable_key
 from app.services.rate_limiter import rate_limiter
 
 RESUME = {"personal_info": {"name": "Jane Doe", "linkedin": "https://linkedin.com/in/jane"}, "summary": "Engineer",
@@ -47,6 +47,23 @@ def test_rule_based_answers() -> None:
     assert by_q["Current company"]["answer"] == "Acme"
     assert by_q["I certify that the information provided is accurate and complete"]["answer"] == "Yes"
     assert all(not a["needs_user_review"] for a in answers if a["question"] != "Years of professional experience")
+
+
+def test_facts_are_never_guessed() -> None:
+    """Without a saved answer, eligibility questions stay blank (flagged) instead of defaulting to the first option."""
+    questions = [
+        {"question": "Will you now or in the future require visa sponsorship?", "options": ["Yes", "No"], "required": True},
+        {"question": "Are you legally authorized to work in the United States?", "options": ["Yes", "No"]},
+        {"question": "Have you ever been convicted of a felony?", "options": ["Yes", "No"]},
+        {"question": "Preferred office", "options": ["Berlin", "London"]},
+    ]
+    by_q = {a["question"]: a for a in answer_questions(questions, RESUME, {}, {}, use_llm=False)}
+    for q in questions[:3]:
+        assert by_q[q["question"]]["answer"] == "" and by_q[q["question"]]["needs_user_review"]
+    assert by_q["Preferred office"]["answer"] == "Berlin" and by_q["Preferred office"]["needs_user_review"]
+    assert learnable_key("Will you now or in the future require visa sponsorship?") == "requires_sponsorship"
+    assert learnable_key("Are you legally authorized to work in the United States?") == "work_authorization"
+    assert learnable_key("Why do you want to work here?") is None
 
 
 def test_llm_answers_for_subjective_questions(fake_llm) -> None:

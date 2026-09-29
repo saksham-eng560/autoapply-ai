@@ -37,3 +37,7 @@ data/
 # Build artifacts
 extension/dist/
 *.zip
+
+# Runtime state
+dump.rdb
+celerybeat-schedule*

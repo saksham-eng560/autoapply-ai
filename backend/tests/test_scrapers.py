@@ -12,7 +12,7 @@ from app.scrapers import SearchQuery, fetch_job_from_url
 from app.scrapers.ashby import AshbyScraper
 from app.scrapers.base import parse_date, parse_salary
 from app.scrapers.browser_scraper import extract_assigned_json, next_data
-from app.scrapers.generic import GenericScraper, find_ats_boards
+from app.scrapers.generic import GenericScraper, company_from_host, find_ats_boards
 from app.scrapers.glassdoor import parse_listings
 from app.scrapers.greenhouse import GreenhouseScraper
 from app.scrapers.indeed import IndeedScraper, parse_description, parse_job_cards
@@ -181,3 +181,18 @@ def test_rate_limited_platform_pauses() -> None:
     with pytest.raises(RateLimited):
         LeverScraper().list_company("busy")
     assert rate_limiter.is_paused("lever")
+
+
+def test_company_name_fallbacks() -> None:
+    assert company_from_host("https://careers.acme-robotics.com/jobs/1") == "Acme Robotics"
+    assert company_from_host("https://www.example.co.uk/careers") == "Example"
+    assert company_from_host("http://127.0.0.1:8765/jobs/1") == "127.0.0.1"
+
+
+@respx.mock
+def test_job_page_without_jsonld_uses_site_name() -> None:
+    respx.get("https://jobs.initech.example/openings/42").mock(return_value=httpx.Response(200, text=(
+        '<html><head><title>Apply</title><meta property="og:site_name" content="Initech"></head>'
+        "<body><main><h1>Data Engineer</h1><p>Build pipelines in Python and Spark.</p></main></body></html>")))
+    job = fetch_job_from_url("https://jobs.initech.example/openings/42")
+    assert job is not None and job.company_name == "Initech" and job.role_title == "Data Engineer"

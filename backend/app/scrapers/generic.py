@@ -62,7 +62,32 @@ def _location(posting: dict[str, Any]) -> tuple[str | None, bool]:
     return ("; ".join(names) or ("Remote" if remote else None)), remote
 
 
-def jobposting_to_job(posting: dict[str, Any], page_url: str) -> ScrapedJob | None:
+_HOST_PREFIXES = {"www", "careers", "career", "jobs", "job", "apply", "boards", "hire", "recruiting", "talent", "work"}
+
+
+def company_from_host(url: str) -> str:
+    """``careers.acme-robotics.com`` -> ``Acme Robotics`` (IP addresses / localhost are returned as-is)."""
+    host = (urlparse(url).hostname or "").lower()
+    if not host or host == "localhost" or re.fullmatch(r"[\d.]+|[0-9a-f]*:[0-9a-f:]*", host):
+        return host or "Unknown"
+    labels = [x for x in host.split(".") if x not in _HOST_PREFIXES]
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in {"co", "com", "org", "net", "ac", "gov", "edu"}:
+        labels = labels[:-1]  # acme.co.uk
+    name = labels[-2] if len(labels) >= 2 else (labels[0] if labels else host)
+    return re.sub(r"[-_]+", " ", name).title()
+
+
+def company_from_page(soup: BeautifulSoup, url: str) -> str:
+    """Company name from page metadata (og:site_name / application-name), else from the host name."""
+    for attrs in ({"property": "og:site_name"}, {"name": "application-name"}):
+        tag = soup.find("meta", attrs=attrs)
+        content = (tag.get("content") or "").strip() if tag else ""
+        if content:
+            return content
+    return company_from_host(url)
+
+
+def jobposting_to_job(posting: dict[str, Any], page_url: str, fallback_company: str | None = None) -> ScrapedJob | None:
     title = posting.get("title") or posting.get("name")
     if not title:
         return None
@@ -79,7 +104,7 @@ def jobposting_to_job(posting: dict[str, Any], page_url: str) -> ScrapedJob | No
     emp = emp[0] if isinstance(emp, list) and emp else emp
     url = posting.get("url") or page_url
     return ScrapedJob(
-        company_name=company or urlparse(page_url).hostname or "Unknown",
+        company_name=company or fallback_company or company_from_host(page_url),
         role_title=title,
         description=posting.get("description") or "",
         source_url=url,
@@ -129,7 +154,8 @@ class GenericScraper(BaseScraper):
     def scrape_page(self, url: str, query: SearchQuery, depth: int = 0) -> list[ScrapedJob]:
         html = self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
-        jobs = [j for j in (jobposting_to_job(p, url) for p in _iter_jsonld(soup)) if j]
+        site = company_from_page(soup, url)
+        jobs = [j for j in (jobposting_to_job(p, url, site) for p in _iter_jsonld(soup)) if j]
         if jobs or depth > 0:
             return jobs
         # Delegate to ATS boards found on the page
@@ -173,7 +199,7 @@ class GenericScraper(BaseScraper):
         html = self.fetch_html(url)
         soup = BeautifulSoup(html, "lxml")
         for posting in _iter_jsonld(soup):
-            job = jobposting_to_job(posting, url)
+            job = jobposting_to_job(posting, url, company_from_page(soup, url))
             if job:
                 job.source_url = url
                 return job
@@ -184,7 +210,7 @@ class GenericScraper(BaseScraper):
             return None
         ref = parse_ats_url(url)
         return ScrapedJob(
-            company_name=urlparse(url).hostname or "Unknown",
+            company_name=company_from_page(soup, url),
             role_title=title.get_text(strip=True),
             description=main.get_text("\n", strip=True)[:20000],
             source_url=url,

@@ -3,18 +3,37 @@ pause for approval -> approve -> submit, against a local mock company site + ATS
 
 from __future__ import annotations
 
-import cgi
 import http.server
 import json
 import threading
 from collections.abc import Iterator
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.worker.dispatch import run_inline
 from tests.conftest import FIXTURES
+
+
+def parse_form(handler: http.server.BaseHTTPRequestHandler) -> dict:
+    """Parse a urlencoded or multipart/form-data body (stdlib only; ``cgi`` is gone in Python 3.13)."""
+    body = handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
+    ctype = handler.headers.get("Content-Type", "")
+    if not ctype.startswith("multipart/form-data"):
+        return {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
+    message = BytesParser(policy=email_policy).parsebytes(f"Content-Type: {ctype}\r\n\r\n".encode() + body)
+    fields: dict = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        payload = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        fields[name] = {"filename": filename, "size": len(payload)} if filename else payload.decode("utf-8", "replace")
+    return fields
+
 
 pytestmark = pytest.mark.e2e
 
@@ -69,12 +88,7 @@ class MockSite:
                     self._send("not found", 404)
 
             def do_POST(self) -> None:
-                form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST"})
-                record = {}
-                for key in form.keys():
-                    item = form[key]
-                    record[key] = {"filename": item.filename, "size": len(item.value)} if item.filename else item.value
-                site.submissions.append(record)
+                site.submissions.append(parse_form(self))
                 self._send("<html><body><h1>Thank you for applying!</h1><p>Your application has been submitted. "
                            "Confirmation number: ACME-777</p></body></html>")
 

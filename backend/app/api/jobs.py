@@ -83,7 +83,9 @@ async def import_job(body: JobImportRequest, user: CurrentUser, db: DB) -> dict:
         app = await anyio.to_thread.run_sync(orch.import_job_url, db, user, body.url)
     except ScraperError as exc:
         raise HTTPException(422, str(exc)) from exc
-    if body.prepare and app.status in (ApplicationStatus.MATCHED, ApplicationStatus.SKIPPED, ApplicationStatus.DISCOVERED):
+    # Without a master resume there is nothing to tailor yet; the job stays in the list to prepare later.
+    if (body.prepare and orch.get_master_resume(db, user) is not None
+            and app.status in (ApplicationStatus.MATCHED, ApplicationStatus.SKIPPED, ApplicationStatus.DISCOVERED)):
         set_status(db, app, ApplicationStatus.PREPARING, "user", "Prepared on request")
         enqueue("prepare_application", str(app.id), after_commit=db)
     return application_summary(app)

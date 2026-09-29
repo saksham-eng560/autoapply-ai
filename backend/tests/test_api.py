@@ -154,6 +154,34 @@ def test_approval_gate(auth_client: TestClient, master_resume: dict, monkeypatch
     assert auth_client.post(f"/api/v1/applications/{app_id}/approve", json={}).status_code == 409
 
 
+def test_approval_requires_answers_and_learns_them(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    from app.submitters import SubmissionResult
+    from app.submitters.greenhouse_submit import GreenhouseSubmitter
+
+    monkeypatch.setattr(GreenhouseSubmitter, "submit", lambda self, packet: SubmissionResult(True, "submitted", screenshot=b"png"))
+    app_id = _seed_app("jane@example.com", ApplicationStatus.PENDING_APPROVAL)
+    question = {"question": "Will you now or in the future require visa sponsorship?", "options": ["Yes", "No"], "required": True}
+    r = auth_client.post(f"/api/v1/applications/{app_id}/approve", json={"custom_answers": [{**question, "answer": ""}]})
+    assert r.status_code == 422 and "sponsorship" in r.json()["detail"]
+    with run_inline():
+        r = auth_client.post(f"/api/v1/applications/{app_id}/approve", json={"custom_answers": [{**question, "answer": "No"}]})
+    assert r.status_code == 202, r.text
+    mappings = {m["field_name"]: m["field_value"] for m in auth_client.get("/api/v1/users/me/field-mappings").json()["mappings"]}
+    assert mappings["requires_sponsorship"] == "No"  # answered automatically next time
+
+
+def test_import_without_resume_does_not_prepare(auth_client: TestClient, monkeypatch) -> None:
+    from app.scrapers.base import ScrapedJob
+    from app.services import agent_orchestrator
+
+    monkeypatch.setattr(agent_orchestrator, "fetch_job_from_url", lambda url: ScrapedJob(
+        company_name="Initech", role_title="Data Engineer", description="Python", source_url=url, application_url=url,
+        source_platform=ATSPlatform.CUSTOM).finalize())
+    r = auth_client.post("/api/v1/jobs/import", json={"url": "https://initech.example/jobs/1", "prepare": True})
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "discovered" and "master resume" in r.json()["match_reasoning"]
+
+
 def test_other_users_cannot_access(auth_client: TestClient, client: TestClient) -> None:
     app_id = _seed_app("jane@example.com", ApplicationStatus.PENDING_APPROVAL)
     client.cookies.clear()

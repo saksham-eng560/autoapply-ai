@@ -204,6 +204,28 @@ def rule_based_answer(question: dict[str, Any], ctx: _Ctx) -> dict[str, Any] | N
     }
 
 
+# Facts about the candidate that must never be guessed: left blank for the user to answer at approval.
+FACTUAL = re.compile(
+    r"sponsor|visa|immigration|authori[sz]ed to work|legally|right to work|work permit|eligible to work|citizen"
+    r"|convict|criminal|felony|clearance|relocat|18 years|over 18|legal age|background check|drug (?:test|screen)"
+)
+
+# Standard answers learned from the user's approvals, so the same question is answered automatically next time.
+LEARNABLE: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?:require|need).{0,40}sponsor|sponsor.{0,40}(?:require|need)"), "requires_sponsorship"),
+    (re.compile(r"authori[sz]ed to work|legally (?:able|eligible|authori)|right to work|eligible to work"), "work_authorization"),
+    (re.compile(r"relocat"), "willing_to_relocate"),
+    (re.compile(r"18 years|over 18|at least 18|legal age"), "over_18"),
+    (re.compile(r"notice period|when can you start|earliest.*start|available to start"), "notice_period"),
+    (re.compile(r"highest (?:level of )?(?:education|degree)"), "highest_education"),
+]
+
+
+def learnable_key(question: str) -> str | None:
+    text = normalize_text(question)
+    return next((key for pattern, key in LEARNABLE if pattern.search(text)), None)
+
+
 def fallback_answer(question: dict[str, Any], ctx: _Ctx) -> dict[str, Any]:
     options = question.get("options") or []
     field_type = question.get("field_type") or ("select" if options else "text")
@@ -211,7 +233,9 @@ def fallback_answer(question: dict[str, Any], ctx: _Ctx) -> dict[str, Any]:
     resume = ctx.resume
     company = ctx.job.company_name if ctx.job else "your company"
     role = ctx.job.role_title if ctx.job else "open"
-    if options:
+    if FACTUAL.search(q):
+        answer = ""
+    elif options:
         answer = options[0]
     elif field_type == "number":
         answer = ""

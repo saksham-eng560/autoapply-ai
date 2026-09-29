@@ -36,7 +36,7 @@ from app.models.application import Application
 from app.models.enums import STATUS_RANK, ApplicationStatus, ATSPlatform
 from app.models.job import Job
 from app.models.resume import Resume
-from app.models.user import User
+from app.models.user import User, UserFieldMapping
 from app.schemas.resume_content import ResumeContent
 from app.scrapers import SCRAPERS, ScrapedJob, ScraperError, SearchQuery, detect_ats_platform, fetch_job_from_url
 from app.services.application_service import set_status
@@ -45,7 +45,7 @@ from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, job_text, prefilter, priority_key
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
-from app.services.question_answerer import answer_questions, mappings_dict
+from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
 from app.services.rate_limiter import rate_limiter
 from app.services.resume_tailor import tailor_resume
 from app.services.text_utils import dedupe_key, extract_skills
@@ -373,6 +373,11 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         if app.status not in (ApplicationStatus.PREPARING,):
             set_status(db, app, ApplicationStatus.PREPARING, "agent", "Preparing application")
         job = app.job
+        if app.match_score is None:  # e.g. imported before a resume existed; score it for the reviewer
+            evaluation = evaluate_match(master.parsed_content, job, user.prefs,
+                                        int(user.prefs.get("auto_apply_threshold") or 80), use_llm=True)
+            app.match_score, app.match_reasoning, app.match_details = (
+                evaluation["match_score"], evaluation["reasoning"], evaluation)
 
         tailored = tailor_resume(master.parsed_content, job)
         resume = Resume(
@@ -581,6 +586,7 @@ def approve_application(db: Session, app: Application, cover_letter: str | None 
         app.cover_letter = cover_letter
     if custom_answers is not None:
         app.custom_answers = [{**a, "needs_user_review": False, "source": a.get("source") or "user"} for a in custom_answers]
+        remember_answers(db, app.user_id, custom_answers)
     app.retry_count = 0
     set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved by user")
     from app.worker.dispatch import enqueue
@@ -588,6 +594,17 @@ def approve_application(db: Session, app: Application, cover_letter: str | None 
     db.flush()
     enqueue("submit_application", str(app.id), after_commit=db)
     return app
+
+
+def remember_answers(db: Session, user_id: uuid.UUID, answers: list[dict[str, Any]]) -> None:
+    """Save approved answers to standard questions (sponsorship, work authorization...) as field mappings."""
+    known = set(db.scalars(select(UserFieldMapping.field_name).where(UserFieldMapping.user_id == user_id)))
+    for answer in answers:
+        value = str(answer.get("answer") or "").strip()
+        key = learnable_key(str(answer.get("question") or ""))
+        if key and value and key not in known:
+            db.add(UserFieldMapping(user_id=user_id, field_name=key, field_value=value, field_type="text"))
+            known.add(key)
 
 
 def submit_application(db: Session, application_id: str) -> Application:
