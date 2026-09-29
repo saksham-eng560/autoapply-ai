@@ -1,0 +1,657 @@
+"""The agent "brain": discovery -> matching -> preparation -> staging -> (approval) -> submission.
+
+Behavioural rules implemented here (PLAN.md §8):
+ 1. Never process a job that already has an application for this user.
+ 2. Never apply to the same company + role twice.
+ 3. Respect max_applications_per_day and per-platform limits (rate_limiter).
+ 4. Unexpected form fields -> flag for manual review.
+ 5. Screenshot at every critical step (staged form, confirmation, failures).
+ 6. Every run is logged to ``agent_runs``.
+ 7. Low-confidence answers -> needs_user_review.
+ 8. Prioritise by match_score DESC, deadline ASC.
+ 9. Salary questions use the bottom of the user's range (question_answerer).
+10. A failed form is retried once before alerting the user.
+And DIRECTIVE 2: nothing is ever submitted without explicit user approval.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import tempfile
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.core.storage import get_storage, user_prefix
+from app.models.agent_run import AgentRun
+from app.models.application import Application
+from app.models.enums import STATUS_RANK, ApplicationStatus, ATSPlatform
+from app.models.job import Job
+from app.models.resume import Resume
+from app.models.user import User
+from app.schemas.resume_content import ResumeContent
+from app.scrapers import SCRAPERS, ScrapedJob, ScraperError, SearchQuery, detect_ats_platform, fetch_job_from_url
+from app.services.application_service import set_status
+from app.services.cover_letter import generate_cover_letter
+from app.services.embeddings import cosine_similarity, embed_text, embed_texts
+from app.services.job_matcher import evaluate_match, job_text, prefilter, priority_key
+from app.services.notifier import notify, push_update
+from app.services.pdf_generator import render_resume_pdf
+from app.services.question_answerer import answer_questions, mappings_dict
+from app.services.rate_limiter import rate_limiter
+from app.services.resume_tailor import tailor_resume
+from app.services.text_utils import dedupe_key, extract_skills
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- run logging
+class RunLog:
+    def __init__(self, db: Session, user: User, run_type: str, trigger: str = "user", existing: AgentRun | None = None) -> None:
+        self.db = db
+        if existing is not None:
+            self.run = existing
+            self.run.status = "running"
+        else:
+            self.run = AgentRun(user_id=user.id, run_type=run_type, trigger=trigger, status="running", log=[])
+            db.add(self.run)
+        db.flush()
+        self._t0 = time.monotonic()
+
+    def log(self, message: str, level: str = "info", **data: Any) -> None:
+        entry = {"ts": datetime.now(UTC).isoformat(), "level": level, "message": message}
+        if data:
+            entry["data"] = data
+        self.run.log = [*(self.run.log or []), entry][-500:]
+        if level == "error":
+            self.run.errors_count = (self.run.errors_count or 0) + 1
+        getattr(logger, "warning" if level == "error" else "info")("[run %s] %s", self.run.id, message)
+
+    def finish(self, status: str = "completed") -> AgentRun:
+        self.run.status = status
+        self.run.completed_at = datetime.now(UTC)
+        self.run.duration_seconds = int(time.monotonic() - self._t0)
+        self.db.flush()
+        push_update(str(self.run.user_id), "agent_run_updated", {"id": str(self.run.id), "status": status})
+        return self.run
+
+
+# --------------------------------------------------------------------------- helpers
+def get_master_resume(db: Session, user: User) -> Resume | None:
+    return db.scalar(
+        select(Resume).where(Resume.user_id == user.id, Resume.is_master.is_(True), Resume.is_active.is_(True))
+        .order_by(Resume.updated_at.desc())
+    )
+
+
+def resume_embedding(db: Session, resume: Resume) -> list[float]:
+    if not resume.skills_embedding:
+        rc = ResumeContent.model_validate(resume.parsed_content)
+        resume.skills_embedding = embed_text(f"{rc.skills_text()}\n{rc.full_text()}")
+        db.flush()
+    return resume.skills_embedding
+
+
+def upsert_job(db: Session, scraped: ScrapedJob) -> tuple[Job, bool]:
+    """Insert or refresh a job. Returns (job, created)."""
+    job = db.scalar(select(Job).where(Job.source_url == scraped.source_url))
+    now = datetime.now(UTC)
+    if job is not None:
+        job.last_checked = now
+        job.is_active = True
+        if scraped.description and len(scraped.description) > len(job.description or ""):
+            job.description = scraped.description
+        return job, False
+    key = dedupe_key(scraped.company_name, scraped.role_title, scraped.location)
+    duplicate = db.scalar(select(Job).where(Job.dedupe_key == key, Job.is_active.is_(True)))
+    if duplicate is not None:
+        duplicate.last_checked = now
+        return duplicate, False
+    job = Job(
+        company_name=scraped.company_name,
+        company_logo_url=scraped.company_logo_url,
+        company_domain=scraped.company_domain,
+        role_title=scraped.role_title,
+        description=scraped.description or scraped.role_title,
+        requirements=scraped.requirements,
+        job_type=scraped.job_type,
+        experience_level=scraped.experience_level,
+        location=scraped.location,
+        is_remote=scraped.is_remote,
+        salary_min=scraped.salary_min,
+        salary_max=scraped.salary_max,
+        salary_currency=scraped.salary_currency or "USD",
+        source_url=scraped.source_url,
+        source_platform=scraped.source_platform,
+        application_url=scraped.application_url or scraped.source_url,
+        external_id=scraped.external_id,
+        easy_apply=scraped.easy_apply,
+        dedupe_key=key,
+        extracted_skills=extract_skills(f"{scraped.role_title}\n{scraped.description}"),
+        raw_data=scraped.raw,
+        posted_date=scraped.posted_date,
+        deadline_date=scraped.deadline_date,
+    )
+    db.add(job)
+    db.flush()
+    return job, True
+
+
+def embed_jobs(db: Session, jobs: list[Job]) -> None:
+    missing = [j for j in jobs if not j.description_embedding]
+    for start in range(0, len(missing), 64):
+        batch = missing[start : start + 64]
+        vectors = embed_texts([job_text(j)[:8000] for j in batch])
+        for job, vec in zip(batch, vectors, strict=True):
+            job.description_embedding = vec
+    db.flush()
+
+
+def already_applied_elsewhere(db: Session, user: User, job: Job) -> bool:
+    """Rule #2: same company + role already in the pipeline for this user."""
+    rows = db.execute(
+        select(Application.status, Job.id)
+        .join(Job, Job.id == Application.job_id)
+        .where(Application.user_id == user.id, Job.dedupe_key == job.dedupe_key, Job.id != job.id)
+    ).all()
+    return any(STATUS_RANK.get(status, 0) >= STATUS_RANK[ApplicationStatus.PREPARING] for status, _ in rows)
+
+
+def application_platform(job: Job) -> ATSPlatform:
+    url = job.application_url or job.source_url
+    if job.source_platform == ATSPlatform.LINKEDIN:
+        external = (job.raw_data or {}).get("external_apply_url")
+        if external:
+            return detect_ats_platform(external)
+        return ATSPlatform.LINKEDIN if job.easy_apply else detect_ats_platform(url)
+    platform = detect_ats_platform(url)
+    if platform in (ATSPlatform.INDEED, ATSPlatform.GLASSDOOR, ATSPlatform.WELLFOUND):
+        return ATSPlatform.CUSTOM
+    return platform
+
+
+# --------------------------------------------------------------------------- discovery
+def discover_jobs(query: SearchQuery, platforms: list[str], run: RunLog | None = None) -> list[ScrapedJob]:
+    results: list[ScrapedJob] = []
+    usable = [p for p in platforms if p in SCRAPERS]
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(usable)))) as pool:
+        futures = {pool.submit(SCRAPERS[p]().search, query): p for p in usable}
+        for future in as_completed(futures):
+            platform = futures[future]
+            try:
+                found = future.result()
+                results.extend(found)
+                if run:
+                    run.log(f"{platform}: found {len(found)} jobs")
+            except ScraperError as exc:
+                if run:
+                    run.log(f"{platform}: {exc}", level="error")
+            except Exception as exc:
+                logger.exception("Scraper %s crashed", platform)
+                if run:
+                    run.log(f"{platform}: unexpected error {type(exc).__name__}: {exc}", level="error")
+    # Deduplicate by URL
+    unique: dict[str, ScrapedJob] = {}
+    for job in results:
+        unique.setdefault(job.source_url, job)
+    return list(unique.values())
+
+
+def ensure_application(db: Session, user: User, job: Job) -> tuple[Application, bool]:
+    app = db.scalar(select(Application).where(Application.user_id == user.id, Application.job_id == job.id))
+    if app is not None:
+        return app, False
+    app = Application(user_id=user.id, job_id=job.id, status=ApplicationStatus.DISCOVERED,
+                      ats_platform=application_platform(job))
+    db.add(app)
+    db.flush()
+    return app, True
+
+
+def evaluate_application(
+    db: Session, user: User, app: Application, master: Resume | None, use_llm: bool = True, resume_vec: list[float] | None = None
+) -> Application:
+    job = app.job
+    prefs = user.prefs
+    threshold = int(prefs.get("auto_apply_threshold") or 80)
+    keep, reason = prefilter(job, prefs)
+    if not keep:
+        app.match_score = 0
+        app.match_reasoning = reason
+        set_status(db, app, ApplicationStatus.SKIPPED, "agent", reason)
+        return app
+    if already_applied_elsewhere(db, user, job):
+        app.match_reasoning = "Already applied to the same role at this company"
+        set_status(db, app, ApplicationStatus.SKIPPED, "agent", app.match_reasoning)
+        return app
+    if master is None:
+        app.match_reasoning = "Upload a master resume to enable matching"
+        return app
+    if resume_vec is not None and job.description_embedding:
+        app.similarity_score = round(cosine_similarity(resume_vec, job.description_embedding), 4)
+    evaluation = evaluate_match(master.parsed_content, job, prefs, threshold, use_llm=use_llm)
+    app.match_score = evaluation["match_score"]
+    app.match_reasoning = evaluation["reasoning"]
+    app.match_details = evaluation
+    if evaluation["proceed_with_application"] and evaluation["match_score"] >= threshold:
+        set_status(db, app, ApplicationStatus.MATCHED, "agent", f"Match score {app.match_score}")
+    else:
+        set_status(db, app, ApplicationStatus.SKIPPED, "agent", f"Match score {app.match_score} below {threshold}")
+    return app
+
+
+def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str] | None = None,
+             auto_prepare: bool = True, run: RunLog | None = None) -> AgentRun:
+    run = run or RunLog(db, user, "scan", trigger)
+    prefs = user.prefs
+    try:
+        master = get_master_resume(db, user)
+        query = SearchQuery.from_preferences(prefs, limit=settings.MAX_JOBS_PER_SOURCE)
+        chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
+        run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
+        scraped = discover_jobs(query, chosen, run)
+        new_apps: list[Application] = []
+        jobs: list[Job] = []
+        for sj in scraped:
+            try:
+                with db.begin_nested():
+                    job, _created = upsert_job(db, sj)
+                    app, created = ensure_application(db, user, job)
+            except Exception as exc:  # noqa: BLE001
+                run.log(f"Could not store job {sj.source_url}: {exc}", level="error")
+                continue
+            jobs.append(job)
+            if created:
+                new_apps.append(app)
+        run.run.jobs_discovered = len(new_apps)
+        run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
+        embed_jobs(db, jobs)
+
+        resume_vec = resume_embedding(db, master) if master else None
+        if master is None:
+            run.log("No master resume uploaded — skipping matching", level="warning")
+        # Rank by vector similarity so the most promising jobs get the (costly) LLM evaluation
+        if resume_vec is not None:
+            new_apps.sort(key=lambda a: cosine_similarity(resume_vec, a.job.description_embedding), reverse=True)
+        for idx, app in enumerate(new_apps):
+            try:
+                evaluate_application(db, user, app, master, use_llm=idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN,
+                                     resume_vec=resume_vec)
+            except Exception as exc:  # noqa: BLE001
+                run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+        matched = [a for a in new_apps if a.status == ApplicationStatus.MATCHED]
+        run.run.jobs_matched = len(matched)
+        run.log(f"{len(matched)} jobs matched your threshold ({prefs.get('auto_apply_threshold')})")
+        user.last_scan_at = datetime.now(UTC)
+
+        if auto_prepare and master is not None:
+            queued = queue_preparations(db, user, matched, run)
+            run.log(f"Queued {queued} applications for preparation")
+        run.finish("completed")
+        notify(db, user, "scan_completed", "Job scan finished",
+               f"{run.run.jobs_discovered} new jobs, {run.run.jobs_matched} matches.", link="/dashboard/jobs",
+               data={"run_id": str(run.run.id)})
+    except Exception as exc:
+        logger.exception("Scan failed for user %s", user.id)
+        run.log(f"Scan failed: {exc}", level="error")
+        run.finish("failed")
+        notify(db, user, "agent_error", "Job scan failed", str(exc)[:300], link="/dashboard/logs")
+    return run.run
+
+
+def queue_preparations(db: Session, user: User, matched: list[Application], run: RunLog | None = None) -> int:
+    """Queue preparation for the best matches, respecting the daily application budget."""
+    from app.worker.dispatch import enqueue
+
+    prefs = user.prefs
+    budget = int(prefs.get("max_applications_per_day") or 25)
+    in_flight = db.scalar(
+        select(func.count()).select_from(Application).where(
+            Application.user_id == user.id,
+            Application.status.in_([ApplicationStatus.PREPARING, ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.APPROVED]),
+        )
+    ) or 0
+    remaining = max(0, budget - rate_limiter.applications_today(str(user.id)) - int(in_flight))
+    ordered = sorted(matched, key=lambda a: priority_key(a.match_score, a.job.deadline_date))
+    count = 0
+    for app in ordered[:remaining]:
+        set_status(db, app, ApplicationStatus.PREPARING, "agent", "Queued for preparation")
+        db.flush()
+        enqueue("prepare_application", str(app.id), after_commit=db)
+        count += 1
+    if run and len(ordered) > remaining:
+        run.log(f"{len(ordered) - remaining} matches deferred (daily budget of {budget} reached)")
+    return count
+
+
+def import_job_url(db: Session, user: User, url: str) -> Application:
+    scraped = fetch_job_from_url(url)
+    if scraped is None:
+        raise ScraperError("Could not read a job posting at that URL")
+    job, _ = upsert_job(db, scraped)
+    embed_jobs(db, [job])
+    app, _ = ensure_application(db, user, job)
+    master = get_master_resume(db, user)
+    if app.status == ApplicationStatus.DISCOVERED:
+        evaluate_application(db, user, app, master, use_llm=True,
+                             resume_vec=resume_embedding(db, master) if master else None)
+    return app
+
+
+# --------------------------------------------------------------------------- preparation
+def _store(user_id: uuid.UUID, folder: str, data: bytes, ext: str, content_type: str) -> str:
+    key = f"{user_prefix(user_id)}/{folder}/{uuid.uuid4().hex}.{ext}"
+    return get_storage().save(key, data, content_type)
+
+
+def render_tailored_pdf(user: User, resume: Resume) -> str:
+    pdf = render_resume_pdf(resume.parsed_content, template=(user.prefs.get("resume_template") or "classic"))
+    key = _store(user.id, "resumes", pdf, "pdf", "application/pdf")
+    resume.pdf_url = key
+    return key
+
+
+def prepare_application(db: Session, application_id: str, stage: bool | None = None) -> Application:
+    app = db.get(Application, uuid.UUID(str(application_id)))
+    if app is None:
+        raise ValueError("Application not found")
+    user = db.get(User, app.user_id)
+    run = RunLog(db, user, "prepare", "system")
+    run.log(f"Preparing {app.job.role_title} @ {app.job.company_name}")
+    try:
+        master = get_master_resume(db, user)
+        if master is None:
+            raise ValueError("No master resume uploaded")
+        if app.status not in (ApplicationStatus.PREPARING,):
+            set_status(db, app, ApplicationStatus.PREPARING, "agent", "Preparing application")
+        job = app.job
+
+        tailored = tailor_resume(master.parsed_content, job)
+        resume = Resume(
+            user_id=user.id,
+            label=f"{job.company_name} — {job.role_title}"[:255],
+            parsed_content=tailored["tailored_resume"],
+            is_master=False,
+            parent_resume_id=master.id,
+            tailored_for_job_id=job.id,
+            changes_made=tailored["changes_made"] + [f"[guard] {v}" for v in tailored["violations"]],
+            version=1,
+        )
+        db.add(resume)
+        db.flush()
+        app.tailored_resume_id = resume.id
+        app.tailored_resume_pdf_url = render_tailored_pdf(user, resume)
+        run.log(f"Tailored resume ({tailored['method']}), {len(tailored['changes_made'])} changes, "
+                f"{len(tailored['violations'])} truthfulness corrections")
+
+        if user.prefs.get("cover_letter_enabled", True):
+            letter = generate_cover_letter(resume.parsed_content, job)
+            app.cover_letter = letter["cover_letter"]
+            run.log(f"Cover letter generated ({letter['method']}, tone={letter['tone']})")
+
+        # Pre-answer questions when the ATS publishes them (Greenhouse API)
+        if app.ats_platform == ATSPlatform.GREENHOUSE:
+            try:
+                from app.scrapers.ats_detect import parse_ats_url
+                from app.scrapers.greenhouse import GreenhouseScraper
+
+                ref = parse_ats_url(job.application_url or job.source_url)
+                if ref.board and ref.job_id:
+                    questions = [q for q in GreenhouseScraper().application_questions(ref.board, ref.job_id)
+                                 if q["field_type"] != "file" and not q["question"].lower().startswith(("first name", "last name", "email", "phone"))]
+                    app.custom_answers = answer_questions(questions, resume.parsed_content, user.prefs,
+                                                          mappings_dict(user.field_mappings), job)
+                    run.log(f"Pre-answered {len(questions)} Greenhouse questions")
+            except Exception as exc:  # noqa: BLE001
+                run.log(f"Could not pre-fetch Greenhouse questions: {exc}", level="warning")
+
+        run.run.applications_prepared = 1
+        should_stage = settings.AUTO_STAGE_APPLICATIONS if stage is None else stage
+        if should_stage:
+            stage_application(db, str(app.id), run=run)
+        else:
+            _mark_ready(db, user, app)
+        run.finish("completed")
+    except Exception as exc:
+        logger.exception("Preparation failed for %s", application_id)
+        run.log(f"Preparation failed: {exc}", level="error")
+        app.error_log = f"{datetime.now(UTC).isoformat()} prepare: {exc}"
+        set_status(db, app, ApplicationStatus.FAILED, "agent", f"Preparation failed: {exc}")
+        run.finish("failed")
+        notify(db, user, "agent_error", f"Could not prepare {app.job.company_name} application", str(exc)[:300],
+               link=f"/dashboard/applications/{app.id}")
+    return app
+
+
+def _mark_ready(db: Session, user: User, app: Application) -> None:
+    set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", "Ready for your review")
+    warn = f" ⚠️ {app.manual_review_reason}" if app.needs_manual_review and app.manual_review_reason else ""
+    notify(
+        db, user, "application_ready",
+        f"Review application: {app.job.role_title} @ {app.job.company_name}",
+        f"Match score {app.match_score or '—'}. Tailored resume, cover letter and answers are ready.{warn}",
+        link=f"/dashboard/applications/{app.id}",
+        data={"application_id": str(app.id), "match_score": app.match_score},
+    )
+
+
+@contextmanager
+def _temp_file(data: bytes, suffix: str, name: str | None = None):  # type: ignore[no-untyped-def]
+    directory = tempfile.mkdtemp(prefix="autoapply-")
+    path = os.path.join(directory, name or f"file{suffix}")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    try:
+        yield path
+    finally:
+        try:
+            os.remove(path)
+            os.rmdir(directory)
+        except OSError:
+            pass
+
+
+def build_packet(db: Session, user: User, app: Application, resume_path: str | None, cover_path: str | None) -> Any:
+    from app.submitters import CandidatePacket
+
+    resume = app.tailored_resume or get_master_resume(db, user)
+    rc = ResumeContent.model_validate(resume.parsed_content if resume else {})
+    info = rc.personal_info
+    name = (info.name or user.full_name or "").split(" ")
+    mappings = mappings_dict(user.field_mappings)
+    job = app.job
+
+    def resolver(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return answer_questions(questions, rc.to_dict(), user.prefs, mappings, job)
+
+    current = rc.experience[0] if rc.experience else None
+    credentials = dict(user.ats_credentials or {})
+    if mappings.get("workday_password") and "workday_password" not in credentials:
+        credentials["workday_password"] = mappings["workday_password"]
+    return CandidatePacket(
+        first_name=name[0] if name else "",
+        last_name=" ".join(name[1:]) if len(name) > 1 else "",
+        email=info.email or user.email,
+        phone=info.phone or user.phone or "",
+        location=info.location or user.location or "",
+        linkedin=info.linkedin or user.linkedin_url or "",
+        github=info.github,
+        portfolio=info.portfolio or mappings.get("website", ""),
+        current_company=current.company if current else "",
+        current_title=current.title if current else "",
+        resume_path=resume_path,
+        cover_letter_text=app.cover_letter,
+        cover_letter_path=cover_path,
+        answers=list(app.custom_answers or []),
+        resolve_answers=resolver,
+        ats_credentials=credentials,
+        linkedin_cookie=user.linkedin_session_cookie,
+        application_url=job.application_url or job.source_url,
+        company_name=job.company_name,
+        role_title=job.role_title,
+    )
+
+
+def _resume_filename(user: User) -> str:
+    safe = "".join(c for c in (user.full_name or "Resume") if c.isalnum() or c in " -_").strip().replace(" ", "_")
+    return f"{safe or 'Resume'}_Resume.pdf"
+
+
+def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> Any:
+    from app.services.pdf_generator import render_cover_letter_pdf
+    from app.submitters import get_submitter
+
+    storage = get_storage()
+    if not app.tailored_resume_pdf_url:
+        resume = app.tailored_resume or get_master_resume(db, user)
+        if resume is None:
+            raise ValueError("No resume available")
+        app.tailored_resume_pdf_url = render_tailored_pdf(user, resume)
+    pdf = storage.read(app.tailored_resume_pdf_url)
+    cover_pdf = render_cover_letter_pdf(app.cover_letter, {"name": user.full_name, "email": user.email}) if app.cover_letter else None
+    submitter = get_submitter(app.ats_platform or application_platform(app.job))
+    with _temp_file(pdf, ".pdf", _resume_filename(user)) as resume_path:
+        if cover_pdf:
+            with _temp_file(cover_pdf, ".pdf", "Cover_Letter.pdf") as cover_path:
+                packet = build_packet(db, user, app, resume_path, cover_path)
+                return submitter.submit(packet) if submit else submitter.stage(packet)
+        packet = build_packet(db, user, app, resume_path, None)
+        return submitter.submit(packet) if submit else submitter.stage(packet)
+
+
+def _merge_answers(existing: list[dict[str, Any]] | None, new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for answer in (existing or []) + new:
+        key = (answer.get("question") or "").strip().lower()
+        if key:
+            merged[key] = {**merged.get(key, {}), **answer}
+    return list(merged.values())
+
+
+def stage_application(db: Session, application_id: str, run: RunLog | None = None) -> Application:
+    """Fill the form and take a screenshot WITHOUT submitting, then wait for approval."""
+    app = db.get(Application, uuid.UUID(str(application_id)))
+    user = db.get(User, app.user_id)
+    result = None
+    for attempt in (1, 2):  # rule #10: retry once
+        result = _run_submitter(db, user, app, submit=False)
+        if result.success or result.session_expired:
+            break
+        if run:
+            run.log(f"Staging attempt {attempt} failed: {result.error}", level="warning")
+    if result.screenshot:
+        app.form_screenshot_url = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
+    app.form_fields = result.fields
+    if result.answers:
+        app.custom_answers = _merge_answers(app.custom_answers, result.answers)
+    app.staged_at = datetime.now(UTC)
+    if result.session_expired:
+        user.linkedin_session_valid = False
+        notify(db, user, "session_expired", "LinkedIn session expired",
+               "Re-sync your LinkedIn session from the browser extension to use Easy Apply.", link="/dashboard/settings")
+    if not result.success:
+        app.needs_manual_review = True
+        app.manual_review_reason = f"Automatic form filling failed: {result.error}. You can still apply manually."
+        app.error_log = f"{datetime.now(UTC).isoformat()} stage: {result.error}"
+    else:
+        app.needs_manual_review = result.needs_manual_review
+        app.manual_review_reason = result.review_reason
+    if run:
+        run.log(f"Staged form on {app.ats_platform.value if app.ats_platform else 'unknown'}: "
+                f"{len([f for f in result.fields if f['status'] == 'filled'])} fields filled"
+                + (f", review needed: {app.manual_review_reason}" if app.needs_manual_review else ""))
+    _mark_ready(db, user, app)
+    return app
+
+
+# --------------------------------------------------------------------------- approval & submission
+def approve_application(db: Session, app: Application, cover_letter: str | None = None,
+                        custom_answers: list[dict[str, Any]] | None = None) -> Application:
+    if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED, ApplicationStatus.MATCHED):
+        raise ValueError(f"Cannot approve an application in status '{app.status.value}'")
+    if cover_letter is not None:
+        app.cover_letter = cover_letter
+    if custom_answers is not None:
+        app.custom_answers = [{**a, "needs_user_review": False, "source": a.get("source") or "user"} for a in custom_answers]
+    app.retry_count = 0
+    set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved by user")
+    from app.worker.dispatch import enqueue
+
+    db.flush()
+    enqueue("submit_application", str(app.id), after_commit=db)
+    return app
+
+
+def submit_application(db: Session, application_id: str) -> Application:
+    """Submit an APPROVED application. Never called for unapproved applications (DIRECTIVE 2)."""
+    app = db.get(Application, uuid.UUID(str(application_id)))
+    if app is None:
+        raise ValueError("Application not found")
+    if app.status != ApplicationStatus.APPROVED:
+        logger.warning("Refusing to submit application %s in status %s", app.id, app.status)
+        return app
+    user = db.get(User, app.user_id)
+    platform = (app.ats_platform or ATSPlatform.UNKNOWN).value
+    allowed, reason = rate_limiter.can_apply(str(user.id), platform, int(user.prefs.get("max_applications_per_day") or 25))
+    if not allowed:
+        app.notes = f"Waiting: {reason}"
+        from app.worker.dispatch import enqueue
+
+        enqueue("submit_application", str(app.id), countdown=int(rate_limiter.cooldown_seconds(platform)) + 30,
+                after_commit=db)
+        return app
+
+    run = RunLog(db, user, "apply", "user")
+    run.log(f"Submitting {app.job.role_title} @ {app.job.company_name} via {platform}")
+    result = _run_submitter(db, user, app, submit=True)
+    if result.screenshot:
+        key = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
+        if result.success:
+            app.confirmation_screenshot_url = key
+    if result.answers:
+        app.custom_answers = _merge_answers(app.custom_answers, result.answers)
+
+    if result.success and result.stage == "submitted":
+        rate_limiter.record_application(str(user.id), platform)
+        app.confirmation_number = result.confirmation_number
+        set_status(db, app, ApplicationStatus.APPLIED, "agent", "Submitted successfully")
+        run.run.applications_submitted = 1
+        run.log("Application submitted ✅")
+        run.finish("completed")
+        notify(db, user, "application_submitted", f"✅ Applied: {app.job.role_title} @ {app.job.company_name}",
+               "Your application was submitted.", link=f"/dashboard/applications/{app.id}")
+        return app
+    if result.success and result.stage == "dry_run":
+        app.needs_manual_review = True
+        app.manual_review_reason = "Dry-run mode (SUBMISSION_DRY_RUN=true): the final Submit click was skipped."
+        set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "system", "Dry run completed")
+        run.log("Dry run — submit click skipped")
+        run.finish("completed")
+        return app
+
+    app.retry_count = (app.retry_count or 0) + 1
+    app.error_log = f"{datetime.now(UTC).isoformat()} submit: {result.error}"
+    run.log(f"Submission failed: {result.error}", level="error")
+    if result.session_expired:
+        notify(db, user, "session_expired", "LinkedIn session expired",
+               "Re-sync your LinkedIn session to finish this Easy Apply.", link="/dashboard/settings")
+    if app.retry_count <= 1 and not result.session_expired:
+        run.log("Retrying once")
+        run.finish("failed")
+        from app.worker.dispatch import enqueue
+
+        enqueue("submit_application", str(app.id), countdown=30, after_commit=db)
+        return app
+    set_status(db, app, ApplicationStatus.FAILED, "agent", f"Submission failed: {result.error}")
+    run.finish("failed")
+    notify(db, user, "application_failed", f"Could not submit {app.job.company_name} application",
+           f"{result.error}. Open the application to apply manually.", link=f"/dashboard/applications/{app.id}")
+    return app
