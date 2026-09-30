@@ -14,7 +14,10 @@ export const metadata: Metadata = {
   title: { default: "AutoApply AI", template: "%s · AutoApply AI" },
   description: "Swipe right on internships — your agent tailors, fills and applies.",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }, { url: "/favicon.ico", sizes: "any" }],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
