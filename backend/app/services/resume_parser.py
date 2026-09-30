@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from itertools import pairwise
 from typing import Any
 
 from app.schemas.resume_content import ResumeContent, normalize_resume
@@ -30,9 +31,19 @@ def extract_text(filename: str, data: bytes) -> str:
         try:
             reader = PdfReader(io.BytesIO(data))
             pages = [page.extract_text() or "" for page in reader.pages]
+            text = "\n".join(pages)
+            if _words_per_line(text) < 2.5:
+                # Canva / some Docs & LaTeX exports store every word as its own text object, so the plain
+                # reader yields one word per line: rebuild the real lines from word positions instead.
+                rebuilt = "\n".join(_positioned_lines(page) for page in reader.pages)
+                if _words_per_line(rebuilt) > _words_per_line(text):
+                    text = rebuilt
+            links = _link_uris(reader)
+            if links:  # "LinkedIn" / "GitHub" are often just clickable words: keep their URLs next to the name
+                first, _, rest = text.partition("\n")
+                text = f"{first}\n{' | '.join(links)}\n{rest}"
         except Exception as exc:
             raise ResumeParseError(f"Could not read PDF: {exc}") from exc
-        text = "\n".join(pages)
     elif name.endswith(".docx"):
         import docx
 
@@ -60,6 +71,61 @@ def extract_text(filename: str, data: bytes) -> str:
     if len(text) < 50:
         raise ResumeParseError("Could not extract text from the resume (is it a scanned image?)")
     return text
+
+
+def _link_uris(reader: Any) -> list[str]:
+    uris: list[str] = []
+    for page in reader.pages:
+        for annot in page.get("/Annots") or []:
+            try:
+                uri = str(annot.get_object().get("/A", {}).get("/URI") or "").strip()
+            except Exception:  # noqa: BLE001 - malformed annotations are just skipped
+                continue
+            if uri.startswith("http") and uri not in uris and "mailto:" not in uri:
+                uris.append(uri)
+    return uris[:10]
+
+
+def _words_per_line(text: str) -> float:
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return sum(len(ln.split()) for ln in lines) / len(lines) if lines else 0.0
+
+
+def _positioned_lines(page: Any) -> str:
+    """Group a PDF page's text runs into lines by baseline, left to right, spacing words by their gaps."""
+    runs: list[tuple[float, float, float, str]] = []  # (y, x, font_size, text)
+
+    def visit(text: str, cm: Any, tm: Any, _font: Any, size: float) -> None:
+        if not text or not text.strip(" \n"):
+            if text and " " in text:  # Google Docs writes the space between words as its own run
+                text = " "
+            else:
+                return
+        # text-space origin -> user space: tm (text matrix) then cm (current transformation matrix)
+        x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+        scale = abs(tm[3] * cm[3]) or 1.0
+        runs.append((y, x, (size or 10) * scale, text.replace("\n", " ")))
+
+    page.extract_text(visitor_text=visit)
+    lines: list[list[tuple[float, float, float, str]]] = []
+    for run in sorted(runs, key=lambda r: (-r[0], r[1])):
+        if lines and abs(lines[-1][0][0] - run[0]) <= max(2.0, run[2] * 0.35):
+            lines[-1].append(run)
+        else:
+            lines.append([run])
+    out = []
+    for line in lines:
+        line.sort(key=lambda r: r[1])
+        text = line[0][3]
+        for prev, cur in pairwise(line):
+            # a gap of more than ~a fifth of the font size between runs is a space
+            est_end = prev[1] + len(prev[3]) * prev[2] * 0.5
+            gap = cur[1] - est_end
+            joiner = "" if (text.endswith((" ", "-")) or cur[3].startswith(" ") or gap < prev[2] * 0.15) else " "
+            text += joiner + cur[3]
+        out.append(re.sub(r"\s+", " ", text).strip())
+    return "\n".join(ln for ln in out if ln)
 
 
 # --------------------------------------------------------------------------- parsing
@@ -144,19 +210,27 @@ def heuristic_parse(text: str) -> dict[str, Any]:
         if current and line:
             sections[current].append(line)
 
+    for key in sections:
+        sections[key] = _join_wrapped(sections[key])
     experience = _parse_entries(sections["experience"], kind="experience")
-    education = _parse_entries(sections["education"], kind="education")
+    education = _education_rows(sections["education"]) or _parse_entries(sections["education"], kind="education")
     projects = []
     for entry in _parse_entries(sections["projects"], kind="experience"):
         description = " ".join(entry["bullets"])
+        # "Name | Python · Kotlin · Flutter | Link": the header lists the stack
+        stack = [t.strip() for t in re.split(r"[·,/•]|\s\|\s", entry["company"]) if 1 < len(t.strip()) <= 30]
         projects.append(
             {
                 "name": entry["title"],
                 "description": description,
-                "technologies": extract_skills(" ".join([description, entry["company"], entry["location"]])),
+                "technologies": list(dict.fromkeys(
+                    stack + extract_skills(" ".join([description, entry["company"], entry["location"]])))),
                 "url": "",
             }
         )
+    for key in ("awards", "certifications"):
+        if any(_BULLET.match(line) for line in sections[key]):  # drop footers that trail a bulleted list
+            sections[key] = [line for line in sections[key] if _BULLET.match(line)]
 
     skills_text = " ".join(sections["skills"])
     listed = [s.strip() for s in re.split(r"[,;|•\n]|\s{2,}", " , ".join(sections["skills"])) if s.strip()]
@@ -179,6 +253,53 @@ def heuristic_parse(text: str) -> dict[str, Any]:
             "awards": [_BULLET.sub("", a) for a in sections["awards"]][:20],
         }
     )
+
+
+def _join_wrapped(lines: list[str]) -> list[str]:
+    """Re-attach the continuation of a bullet that wrapped onto the next line."""
+    out: list[str] = []
+    for line in lines:
+        prev = out[-1] if out else ""
+        wrapped = (
+            prev and _BULLET.match(prev) and not _BULLET.match(line) and " | " not in line
+            and not _DATE_RANGE.search(line)
+            and (line[:1].islower() or line[:1] in "(&" or (not re.search(r"[.!?:]$", prev) and line.endswith(".")))
+        )
+        if wrapped:
+            out[-1] = f"{prev} {line}"
+        else:
+            out.append(line)
+    return out
+
+
+_YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
+_SCORE = re.compile(r"(\d+(?:\.\d+)?\s*(?:/\s*\d+(?:\.\d+)?\s*)?(?:CGPA|GPA|CPI|SGPA|%|percent))\s*$", re.I)
+
+
+def _education_rows(lines: list[str]) -> list[dict[str, Any]]:
+    """Table-style education: "B.Tech (CS) 2025-Present Delhi Technological University 8.8 CGPA" per row."""
+    rows = [ln for ln in lines if not (re.search(r"institution|university|school|college", ln, re.I)
+                                      and re.search(r"\b(degree|course|year|score)\b", ln, re.I)
+                                      and not _YEAR.search(ln))]
+    if not rows or any(_BULLET.match(r) or not _YEAR.search(r) for r in rows):
+        return []
+    entries = []
+    for row in rows:
+        dates = _DATE_RANGE.search(row)
+        match = dates or _YEAR.search(row)
+        before, after = row[: match.start()].strip(" |,-–—"), row[match.end():].strip(" |,-–—")
+        score = _SCORE.search(after)
+        institution = after[: score.start()].strip(" |,-–—") if score else after
+        entries.append({
+            "institution": institution,
+            "degree": before,
+            "field": "",
+            "gpa": score.group(1).strip() if score else "",
+            "start_date": dates.group(1) if dates else "",
+            "end_date": dates.group(2) if dates else match.group(0),
+            "highlights": [],
+        })
+    return entries
 
 
 def _parse_entries(lines: list[str], kind: str) -> list[dict[str, Any]]:
