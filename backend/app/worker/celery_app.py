@@ -51,6 +51,7 @@ celery_app.conf.update(
         "interview-reminders": {"task": "autoapply.send_interview_reminders", "schedule": 600.0},
         "linkedin-sync": {"task": "autoapply.linkedin_sync_all", "schedule": crontab(hour=6, minute=23)},
         "weekly-summary": {"task": "autoapply.weekly_summary", "schedule": crontab(day_of_week="mon", hour=8, minute=41)},
+        "progress-digest": {"task": "autoapply.progress_digest", "schedule": crontab(minute=43)},  # hourly; ~20:00 local
         "retention-cleanup": {"task": "autoapply.retention_cleanup", "schedule": crontab(hour=4, minute=11)},
         "expire-stale-jobs": {"task": "autoapply.expire_stale_jobs", "schedule": crontab(hour=5, minute=3)},
     },

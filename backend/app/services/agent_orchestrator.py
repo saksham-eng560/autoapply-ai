@@ -28,7 +28,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -49,6 +49,7 @@ from app.services.application_service import set_status
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
+from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
 from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
@@ -282,6 +283,11 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
         checkpoint(db)
         scraped = discover_jobs(query, chosen, run)
+        if query.focus is not None:
+            scraped, dropped = balance_by_location(scraped, query.focus)
+            if dropped:
+                run.log(f"Location focus: kept ~{query.focus.share}% of postings in {query.focus.country.title()} "
+                        f"({dropped} from elsewhere left out this scan)")
         new_apps: list[Application] = []
         jobs: list[Job] = []
         for sj in scraped:
@@ -355,6 +361,16 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
     return run.run
 
 
+def focus_rank(job: Job, prefs: dict[str, Any]) -> tuple[int, int]:
+    """(location tier, season rank): prime city before the rest of the country, the target season first."""
+    focus, season = get_focus(prefs), get_season(prefs)
+    tier = location_tier(job.location, job.is_remote, focus) if focus else 0
+    if season is None:
+        return tier, 0
+    state, _ = season_status(job.role_title, job.description, (job.raw_data or {}).get("terms"), season)
+    return tier, 0 if state == "match" else 1
+
+
 def queue_preparations(db: Session, user: User, matched: list[Application], run: RunLog | None = None) -> int:
     """Queue preparation for the best matches, respecting the daily application budget."""
     from app.worker.dispatch import enqueue
@@ -368,7 +384,7 @@ def queue_preparations(db: Session, user: User, matched: list[Application], run:
         )
     ) or 0
     remaining = max(0, budget - rate_limiter.applications_today(str(user.id)) - int(in_flight))
-    ordered = sorted(matched, key=lambda a: priority_key(a.match_score, a.job.deadline_date))
+    ordered = sorted(matched, key=lambda a: (*focus_rank(a.job, prefs), *priority_key(a.match_score, a.job.deadline_date)))
     count = 0
     for app in ordered[:remaining]:
         set_status(db, app, ApplicationStatus.PREPARING, "agent", "Queued for preparation")
@@ -620,7 +636,7 @@ def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | No
     """Kept jobs go straight to submission when nothing needs a human; everything else waits for review."""
     from app.worker.dispatch import enqueue
 
-    if app.auto_submit and app.review_decision == "keep":
+    if app.auto_submit and app.review_decision == "keep" and not (app.job.raw_data or {}).get("apply_on_site"):
         blockers = unanswered_questions(app, trust_generated=bool(user.prefs.get("trust_generated_answers", True)))
         if not app.needs_manual_review and not blockers:
             set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved when you kept it in Swipe Review")
@@ -744,6 +760,17 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     """Fill the form and take a screenshot WITHOUT submitting, then wait for approval."""
     app = db.get(Application, uuid.UUID(str(application_id)))
     user = db.get(User, app.user_id)
+    site = (app.job.raw_data or {}).get("apply_on_site")
+    if site:  # boards like Internshala only take applications from your own logged-in account
+        app.auto_submit = False
+        app.needs_manual_review = True
+        app.manual_review_reason = (f"{site} needs your own {site} login: open the application form, apply there, "
+                                    "then click “I Applied” so the agent keeps tracking it.")
+        app.staged_at = datetime.now(UTC)
+        if run:
+            run.log(f"{site} posting: your resume and answers are ready; apply on {site} yourself")
+        _mark_ready(db, user, app)
+        return app
     result = None
     checkpoint(db)
     for attempt in (1, 2):  # rule #10: retry once
@@ -752,6 +779,11 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
             break
         if run:
             run.log(f"Staging attempt {attempt} failed: {result.error}", level="warning")
+    db.refresh(app, attribute_names=["status"])
+    if app.status != ApplicationStatus.PREPARING:  # e.g. you clicked "I Applied" while the form was being filled
+        if run:
+            run.log(f"Form filled, but the job is now {app.status.value.replace('_', ' ')}; leaving it as is")
+        return app
     if result.screenshot:
         app.form_screenshot_url = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
     app.form_fields = result.fields
@@ -794,6 +826,31 @@ def approve_application(db: Session, app: Application, cover_letter: str | None 
     db.flush()
     enqueue("submit_application", str(app.id), after_commit=db)
     return app
+
+
+def mark_self_applied(db: Session, user: User, app: Application, applied_on: date | None = None,
+                      note: str | None = None) -> bool:
+    """"I Applied": you applied on your own. The agent stops working on it and tracks it from now on.
+
+    Returns False when the application is already at "applied" or further along (nothing moves backwards).
+    """
+    if STATUS_RANK.get(app.status, 0) >= STATUS_RANK[ApplicationStatus.APPLIED] and app.status != ApplicationStatus.WITHDRAWN:
+        return False
+    app.auto_submit = False
+    app.needs_manual_review = False
+    app.manual_review_reason = None
+    set_status(db, app, ApplicationStatus.APPLIED, "user", note or "You applied on your own")
+    if applied_on is not None and applied_on <= datetime.now(UTC).date():
+        app.submitted_at = datetime(applied_on.year, applied_on.month, applied_on.day, 12, tzinfo=UTC)
+    job = app.job
+    notify(
+        db, user, "self_applied", f"📌 Tracking: {job.role_title} @ {job.company_name}",
+        "You applied on your own. AutoApply AI now watches your inbox for replies from "
+        f"{job.company_name} and will tell you about every update (acknowledgement, test, interview, offer).",
+        link=f"/dashboard/applications/{app.id}",
+        data={"application_id": str(app.id), "company": job.company_name, "role": job.role_title},
+    )
+    return True
 
 
 def remember_answers(db: Session, user_id: uuid.UUID, answers: list[dict[str, Any]]) -> None:

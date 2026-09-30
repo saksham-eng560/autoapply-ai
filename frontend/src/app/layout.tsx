@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Dela_Gothic_One, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { MotionProvider } from "@/components/motion-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="font-sans">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} storageKey="theme" disableTransitionOnChange>
           <TooltipProvider delayDuration={200}>
-            <ToastProvider>{children}</ToastProvider>
+            <ToastProvider><MotionProvider>{children}</MotionProvider></ToastProvider>
           </TooltipProvider>
         </ThemeProvider>
       </body>

@@ -10,6 +10,7 @@ from app.config import settings
 from app.models.agent_run import AgentRun
 from app.models.application import Application, ApplicationStatusHistory
 from app.models.communication import Communication
+from app.models.enums import ApplicationStatus
 from app.models.interview import Interview
 from app.models.job import Job
 from app.models.resume import Resume
@@ -49,6 +50,9 @@ def user_out(user: User) -> dict[str, Any]:
     }
 
 
+MANUAL_URL_PREFIX = "https://manual.autoapply.invalid/"  # applications you logged without a link
+
+
 def job_out(job: Job, application: Application | None = None) -> dict[str, Any]:
     out = {
         "id": str(job.id),
@@ -62,7 +66,7 @@ def job_out(job: Job, application: Application | None = None) -> dict[str, Any]:
         "salary_min": job.salary_min,
         "salary_max": job.salary_max,
         "salary_currency": job.salary_currency,
-        "source_url": job.source_url,
+        "source_url": None if job.source_url.startswith(MANUAL_URL_PREFIX) else job.source_url,
         "source_platform": enum(job.source_platform),
         "application_url": job.application_url,
         "easy_apply": job.easy_apply,
@@ -88,9 +92,15 @@ def job_detail_out(job: Job, application: Application | None = None) -> dict[str
             "nice_to_haves": job.nice_to_haves}
 
 
-def application_summary(app: Application) -> dict[str, Any]:
+def is_self_applied(app: Application) -> bool:
+    """You told us you applied on your own ("I Applied") rather than the agent submitting it."""
+    return any(h.new_status == ApplicationStatus.APPLIED and h.changed_by == "user" for h in app.history)
+
+
+def application_summary(app: Application, self_applied: bool | None = None) -> dict[str, Any]:
     job = app.job
     return {
+        "self_applied": is_self_applied(app) if self_applied is None else self_applied,
         "id": str(app.id),
         "status": enum(app.status),
         "match_score": app.match_score,

@@ -17,6 +17,7 @@ from app.models.job import Job
 from app.models.user import Notification, User
 from app.services.analytics import compute_overview
 from app.services.notifier import notify
+from app.services.progress import send_due_digests
 from app.worker.celery_app import celery_app
 from app.worker.dispatch import register
 
@@ -50,6 +51,12 @@ def send_interview_reminders() -> int:
                 interview.reminder_24h_sent = True
                 sent += 1
     return sent
+
+
+@register("progress_digest")
+def progress_digest() -> int:
+    """Hourly check; each user gets their digest at ~20:00 local time (see services/progress.py)."""
+    return send_due_digests()
 
 
 @register("weekly_summary")
@@ -104,6 +111,11 @@ def expire_stale_jobs() -> int:
 @celery_app.task(name="autoapply.send_interview_reminders")
 def send_interview_reminders_task() -> int:
     return send_interview_reminders()
+
+
+@celery_app.task(name="autoapply.progress_digest")
+def progress_digest_task() -> int:
+    return progress_digest()
 
 
 @celery_app.task(name="autoapply.weekly_summary")

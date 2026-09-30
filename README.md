@@ -38,6 +38,8 @@ and shows you what is working.
 - [One-command start](#one-command-start)
 - [What it does](#what-it-does)
 - [Swipe Review and mass applying](#swipe-review-and-mass-applying)
+- [Internships in India: Summer 2027, Delhi NCR first](#internships-in-india-summer-2027-delhi-ncr-first)
+- ["I Applied" and progress tracking](#i-applied-and-progress-tracking)
 - [How it works](#how-it-works)
 - [Quick start (Docker)](#quick-start-docker)
 - [Try the whole loop safely with the demo careers site](#try-the-whole-loop-safely-with-the-demo-careers-site)
@@ -146,11 +148,14 @@ sends browser notifications.
 light theme: Dela Gothic One display type, Space Grotesk for the interface, hairline grid lines,
 square controls and outlined pill tags. It's built from [shadcn/ui](https://ui.shadcn.com) (Radix)
 components restyled through the design tokens in `frontend/src/app/globals.css`, with framer-motion
-for the swipe deck. The logo, favicon, PWA and extension icons all use the same bracket-and-red-block
+for the swipe deck, page transitions (a red sweep across the top on every page change), staggered
+lists, counting numbers, the sliding sidebar highlight and the landing-page pipeline graphic. Every
+animation turns off when your system's "reduce motion" setting is on. The logo, favicon, PWA and extension icons all use the same bracket-and-red-block
 mark (`frontend/public/icon.svg`).
 
-**Notifications.** In-app, e-mail (SMTP or your own Gmail), Discord and Slack. You choose which
-events go to which channel, and there's a weekly summary.
+**Notifications.** In-app, browser, e-mail (SMTP or your own Gmail), Discord and Slack. Every update on
+a job you applied to (submitted, "I Applied", reply, test, interview, offer, rejection) goes to all of
+them, and a progress e-mail summarises everything each evening (see [below](#i-applied-and-progress-tracking)).
 
 **Your data.** Export everything as JSON, or delete your account with all files and tokens (GDPR/CCPA).
 OAuth tokens and cookies are encrypted with AES-256-GCM, and closed applications older than the retention period are
@@ -165,6 +170,8 @@ breakdown, the skills you have and the ones they want.
 - **Drag right** or press **→** to keep: the agent tailors, fills and applies.
 - **Drag left** or press **←** to skip.
 - **Z** undoes the last swipe (until preparation has started).
+- **A** or **I Applied to this myself**: you already applied on your own. The card flies off the deck,
+  moves to Applied and is tracked from then on.
 - **Keep in bulk**: keep every card at or above a score in one click (with the current filters).
 - Filters: search, internship / full-time, remote only. A counter shows how many are left.
 
@@ -172,6 +179,7 @@ breakdown, the skills you have and the ones they want.
 
 | Preset | What it adds |
 |---|---|
+| **India · Summer 2027** | Internships only for Summer 2027, ~90% in India with Delhi NCR first: Internshala, LinkedIn India and Indeed India, plus the Summer 2027 lists for the rest. |
 | **Internships** | Intern versions of your target roles, internship-only job types, the SimplifyJobs and vanshb03 internship lists (4,000+ live postings, refreshed daily), ~110 startup Greenhouse / Ashby / Lever boards, 100 applications a day, 300 jobs per source per scan. |
 | **Startups** | The ~110 startup boards, keeping your roles and job types. |
 | **New grad** | Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards. |
@@ -191,6 +199,51 @@ Mass-apply settings (all in Settings › Mass apply):
 
 Daily and per-platform caps (e.g. 40 Greenhouse, 10 Workday applications a day, with randomized
 cool-downs) still apply to every submission.
+
+## Internships in India: Summer 2027, Delhi NCR first
+
+Out of the box the agent hunts **internships only**, for **Summer 2027**, with **about 90% of every scan
+in India** and **Delhi NCR** (Delhi, New Delhi, Gurugram, Noida, Greater Noida, Faridabad, Ghaziabad)
+as the prime location. All of it is in Settings › Preferences › Internship focus.
+
+- **Where it looks.** [Internshala](https://internshala.com) (India's biggest internship board, searched
+  by your roles in your prime cities, work-from-home and all of India; paste your own Internshala search
+  URLs in Settings › Job sources), LinkedIn searched for "Delhi, India" and "India", Indeed and
+  Glassdoor on their Indian sites (`in.indeed.com`, `glassdoor.co.in`), plus the Summer 2027 GitHub lists
+  and startup boards for the remaining ~10%.
+- **What you see first.** Swipe Review shows prime-city internships first, then the rest of India, then
+  remote, then abroad; within each group, postings that name Summer 2027 come first. Cards carry
+  **Prime location**, **India** and **Summer 2027** badges.
+- **~90% India.** After each scan the agent keeps roughly 9 Indian postings for every 1 from elsewhere
+  (remote roles preferred). Cities such as "Bengaluru, Karnataka" count as India even when the listing
+  doesn't say so. Change the share with the slider (50–100%) or switch the focus off.
+- **Summer 2027.** Postings clearly for another term ("Summer 2026", "Fall '26", "Intern 2026") are
+  skipped. Ones that don't say are kept, and ones that start immediately get a heads-up.
+- **Internshala applications** need your own Internshala login, so for those the agent prepares your
+  resume and answers and then asks you to apply there. Click **I Applied** afterwards and it's tracked.
+
+Internshala changes its pages from time to time. Check the scraper on your server with
+`backend/.venv/bin/python scripts/test_scraper.py internshala -k "Software Engineer" -l Delhi`.
+
+## "I Applied" and progress tracking
+
+Applied to something on your own? Click **I Applied**. It's on every job in All jobs, every card in
+Applications, the application page and Swipe Review (key **A**). The job moves to **Applied** and into
+its own section, **I Applied** (`/dashboard/applied`), and the agent stops working on it:
+
+- It watches your Gmail for replies from that company and updates the status by itself (applied →
+  heard back → interview → offer, or closed). Nothing ever moves backwards.
+- Every update is sent **everywhere**: the dashboard and browser, your Gmail, and Discord/Slack if
+  connected ("Application status: applied → interview (SDE Intern @ Zomato)").
+- A **progress e-mail** at about 8 PM your time (daily by default; weekly or off in Settings ›
+  Integrations › Notifications) lists what changed, where everything stands, applications with no
+  reply after 7 days (time for a polite follow-up) and interviews this week. **Progress e-mail** on the
+  I Applied page sends one right away.
+- **Log an application** adds one the agent never found (a referral, a company site): company, role,
+  link, date and notes.
+
+The I Applied page shows how far your applications got (applied, heard back, interviewing, offers),
+lets you filter and search them, and update a status by hand when a recruiter calls instead of e-mailing.
 
 ## How it works
 

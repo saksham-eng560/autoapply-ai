@@ -8,6 +8,7 @@ import {
   ShieldCheck, Sparkles, XCircle,
 } from "lucide-react";
 import { ApprovalModal } from "@/components/approval-modal";
+import { IAppliedButton, SelfAppliedTag, canSelfApply } from "@/components/i-applied-button";
 import { JobMatchBadge } from "@/components/job-match-badge";
 import { StatusBadge } from "@/components/status-badge";
 import { StatusTimeline } from "@/components/status-timeline";
@@ -100,6 +101,7 @@ export default function ApplicationDetailPage() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="display text-2xl sm:text-[1.9rem]">{job?.role_title}</h1>
               <StatusBadge status={app.status} />
+              {app.self_applied && <SelfAppliedTag />}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
               <span className="inline-flex items-center gap-1"><Building2 className="h-4 w-4" />{job?.company_name}</span>
@@ -116,6 +118,7 @@ export default function ApplicationDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {canSelfApply(app.status) && <IAppliedButton applicationId={app.id} size="default" onApplied={() => mutate()} />}
           {reviewable && (
             <>
               {dirty && <Button variant="outline" onClick={saveEdits} loading={busy === "save"}><Save /> Save edits</Button>}
@@ -157,9 +160,7 @@ export default function ApplicationDetailPage() {
             <Button size="sm" variant="outline" onClick={() => run("restage", () => post(`/applications/${app.id}/restage`), "Re-filling the form")} loading={busy === "restage"}>
               <RefreshCw /> Re-fill form
             </Button>
-            <Button size="sm" variant="outline" onClick={() => run("manual", () => post(`/applications/${app.id}/mark-applied`), "Marked as applied")} loading={busy === "manual"}>
-              <CheckCircle2 /> I applied manually
-            </Button>
+            <IAppliedButton applicationId={app.id} onApplied={() => mutate()} />
           </div>
         </div>
       )}

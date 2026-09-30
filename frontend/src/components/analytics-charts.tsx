@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { TooltipProps } from "recharts";
+import { MaybeAnimatedNumber } from "@/components/motion";
 import { Button } from "@/components/ui/button";
 import type { Overview } from "@/lib/types";
 import { STATUS_LABELS, cn } from "@/lib/utils";
@@ -159,7 +160,7 @@ export function StatTile({ label, value, hint, className, icon }: {
         <span className="label-caps text-[10px]">{label}</span>
         {icon}
       </div>
-      <p className="mt-4 font-display text-4xl leading-none tabular-nums">{value}</p>
+      <p className="mt-4 font-display text-4xl leading-none"><MaybeAnimatedNumber value={value} /></p>
       {hint && <p className="mt-3 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );

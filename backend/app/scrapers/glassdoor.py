@@ -13,10 +13,12 @@ from app.automation.browser import BrowserUnavailable
 from app.models.enums import ATSPlatform
 from app.scrapers.base import ScrapedJob, ScraperError, SearchQuery, parse_date, parse_salary
 from app.scrapers.browser_scraper import BrowserScraper
+from app.services.location_focus import is_indian_location
 
 logger = logging.getLogger(__name__)
 
 BASE = "https://www.glassdoor.com"
+INDIA_BASE = "https://www.glassdoor.co.in"
 
 
 def parse_listings(html: str) -> list[dict[str, Any]]:
@@ -63,7 +65,8 @@ class GlassdoorScraper(BrowserScraper):
                 for keyword in query.keywords or [""]:
                     for location in query.locations or [""]:
                         age = min(query.posted_within_days or 14, 30)
-                        url = (f"{BASE}/Job/jobs.htm?sc.keyword={quote_plus(keyword)}"
+                        base = INDIA_BASE if is_indian_location(location) else BASE
+                        url = (f"{base}/Job/jobs.htm?sc.keyword={quote_plus(keyword)}"
                                f"&locKeyword={quote_plus(location)}&fromAge={age}")
                         if query.remote:
                             url += "&remoteWorkType=1"

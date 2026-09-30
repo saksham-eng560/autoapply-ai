@@ -11,6 +11,15 @@ from app.models.job import Job
 from app.schemas.resume_content import ResumeContent
 from app.services import llm_schemas
 from app.services.llm import LLMError, get_llm, render_prompt
+from app.services.location_focus import (
+    TIER_ABROAD,
+    TIER_COUNTRY,
+    TIER_PRIME,
+    get_focus,
+    get_season,
+    location_tier,
+    season_status,
+)
 from app.services.text_utils import (
     canonical_skill,
     display_skill,
@@ -117,6 +126,14 @@ def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str
         if NO_SPONSORSHIP_PATTERNS.search(f"{sponsorship} {job.description[:6000]}"):
             hard.append("The posting says it does not sponsor visas")
 
+    season = get_season(prefs)
+    if season is not None and _is_internship(job):
+        state, note = season_status(job.role_title, job.description, (job.raw_data or {}).get("terms"), season)
+        if state == "conflict" and note:
+            hard.append(note)
+        elif state in ("other_mentioned", "immediate") and note:
+            soft.append(note)
+
     remote_pref = prefs.get("remote_preference") or "any"
     if remote_pref == "remote" and not job.is_remote and "remote" not in text:
         soft.append("Not a remote role")
@@ -131,6 +148,11 @@ def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str
         if not any(_role_matches(t, title) for t in targets):
             soft.append("Title does not match your target roles")
     return hard, soft
+
+
+def _is_internship(job: Job) -> bool:
+    return (job.job_type is not None and job.job_type.value == "internship") or bool(
+        re.search(r"\bintern(ship)?\b|co-?op", job.role_title or "", re.IGNORECASE))
 
 
 def prefilter(job: Job, prefs: dict[str, Any], strict: bool = True) -> tuple[bool, str | None]:
@@ -161,6 +183,17 @@ def _role_matches(target: str, title: str) -> bool:
 
 # --------------------------------------------------------------------------- scoring
 def _location_score(job: Job, prefs: dict[str, Any]) -> tuple[int, str]:
+    focus = get_focus(prefs)
+    if focus is not None:  # e.g. India first, Delhi NCR the prime location
+        tier = location_tier(job.location, job.is_remote, focus)
+        country = focus.country.title()
+        if tier == TIER_PRIME:
+            return 20, "in your prime location"
+        if tier == TIER_COUNTRY:
+            return 17, f"in {country}"
+        if tier == TIER_ABROAD:
+            return 4, f"outside {country}"
+        return 13, "remote / location not stated"
     remote_pref = prefs.get("remote_preference") or "any"
     job_loc = normalize_text(job.location or "")
     is_remote = job.is_remote or "remote" in job_loc
@@ -256,7 +289,8 @@ def llm_evaluation(resume_content: dict[str, Any], job: Job, prefs: dict[str, An
         threshold=threshold,
         user_preferences_json={k: prefs.get(k) for k in (
             "target_roles", "target_locations", "remote_preference", "salary_min", "salary_max",
-            "experience_level", "industries", "companies_to_avoid", "companies_to_target", "job_types")},
+            "experience_level", "industries", "companies_to_avoid", "companies_to_target", "job_types",
+            "location_focus", "internship_season")},
         master_resume_json=resume_content,
         company_name=job.company_name,
         role_title=job.role_title,

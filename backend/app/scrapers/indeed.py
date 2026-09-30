@@ -12,10 +12,17 @@ from app.automation.browser import BrowserUnavailable
 from app.models.enums import ATSPlatform
 from app.scrapers.base import ScrapedJob, ScraperError, SearchQuery, parse_date, parse_salary
 from app.scrapers.browser_scraper import BrowserScraper, extract_assigned_json
+from app.services.location_focus import is_indian_location
 
 logger = logging.getLogger(__name__)
 
 BASE = "https://www.indeed.com"
+INDIA_BASE = "https://in.indeed.com"
+
+
+def base_for(location: str) -> str:
+    """Indeed runs one site per country; Indian locations are searched on in.indeed.com."""
+    return INDIA_BASE if is_indian_location(location) else BASE
 
 
 def parse_job_cards(html: str) -> list[dict[str, Any]]:
@@ -36,11 +43,11 @@ class IndeedScraper(BrowserScraper):
     platform = ATSPlatform.INDEED
     rate_key = "indeed"
 
-    def card_to_job(self, card: dict[str, Any], description: str) -> ScrapedJob:
+    def card_to_job(self, card: dict[str, Any], description: str, base: str = BASE) -> ScrapedJob:
         salary = (card.get("salarySnippet") or {}).get("text") or ""
         parsed_salary = parse_salary(salary)
         jk = card.get("jobkey")
-        url = f"{BASE}/viewjob?jk={jk}"
+        url = f"{base}/viewjob?jk={jk}"
         third_party = card.get("thirdPartyApplyUrl")
         return ScrapedJob(
             company_name=card.get("company") or "Unknown",
@@ -66,7 +73,8 @@ class IndeedScraper(BrowserScraper):
             with self.open_session() as session:
                 for keyword in query.keywords or [""]:
                     for location in query.locations or ["remote" if query.remote else ""]:
-                        url = f"{BASE}/jobs?q={quote_plus(keyword)}&l={quote_plus(location)}&fromage={min(query.posted_within_days or 14, 14)}"
+                        base = base_for(location)
+                        url = f"{base}/jobs?q={quote_plus(keyword)}&l={quote_plus(location)}&fromage={min(query.posted_within_days or 14, 14)}"
                         if query.remote:
                             url += "&sc=0kf%3Aattr%28DSQF7%29%3B"
                         cards = parse_job_cards(self.browser_get(session, url, "#mosaic-provider-jobcards"))
@@ -76,11 +84,11 @@ class IndeedScraper(BrowserScraper):
                             if not query.matches_title(card.get("displayTitle") or ""):
                                 continue
                             try:
-                                detail_html = self.browser_get(session, f"{BASE}/viewjob?jk={card.get('jobkey')}", "#jobDescriptionText")
+                                detail_html = self.browser_get(session, f"{base}/viewjob?jk={card.get('jobkey')}", "#jobDescriptionText")
                                 description = parse_description(detail_html)
                             except ScraperError:
                                 description = ""
-                            jobs.append(self.card_to_job(card, description))
+                            jobs.append(self.card_to_job(card, description, base))
         except BrowserUnavailable as exc:
             raise ScraperError(str(exc)) from exc
         return self.filter(jobs, query)

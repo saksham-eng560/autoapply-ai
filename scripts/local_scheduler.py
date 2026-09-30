@@ -34,6 +34,7 @@ SCHEDULE: list[tuple[str, int, bool]] = [
     ("expire_stale_jobs", 24 * 3600, False),
     ("retention_cleanup", 24 * 3600, False),
     ("weekly_summary", 7 * 24 * 3600, False),
+    ("progress_digest", 60 * 60, False),  # sends at ~20:00 in your time zone
 ]
 
 _running = True

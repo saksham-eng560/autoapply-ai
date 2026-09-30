@@ -9,6 +9,7 @@ import {
 import { ApplicationCard } from "@/components/application-card";
 import { StatTile, TimelineChart } from "@/components/analytics-charts";
 import { TunnelGrid } from "@/components/brand";
+import { FocusStrip } from "@/components/motion-graphics";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -92,6 +93,7 @@ export default function OverviewPage() {
   const { data: status, mutate: refreshStatus } = useAgentStatus();
   const { data: overview, isLoading } = useOverview();
   const { data: pending } = useApplications({ status: "pending_approval", page_size: 5, sort: "match" });
+  const { data: me } = useMe();
   const [scanning, setScanning] = useState(false);
 
   const running = status?.running_runs.find((r) => r.run_type === "scan");
@@ -122,6 +124,7 @@ export default function OverviewPage() {
           </Button>
         }
       />
+      {me && <FocusStrip prefs={me.preferences} />}
       <Onboarding />
       {status && <SwipeBand count={status.to_review} onScan={startScan} scanning={scanning || !!running} disabled={!status.has_master_resume} />}
 
