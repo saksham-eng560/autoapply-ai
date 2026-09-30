@@ -179,3 +179,19 @@ def test_rate_limiter_limits() -> None:
     assert not ok and "Daily application limit" in reason
     rate_limiter.pause_platform("indeed", 60)
     assert rate_limiter.is_paused("indeed") and not rate_limiter.allow_request("indeed")
+
+
+def test_routine_events_do_not_send_email(db, monkeypatch) -> None:
+    import app.services.notifier as notifier
+
+    sent: list[str] = []
+    monkeypatch.setattr(notifier, "send_email", lambda to, subject, *a, **k: sent.append(subject) or True)
+    user = User(email="quiet@example.com", full_name="Q", preferences={"notification_channels": ["dashboard", "email"]})
+    db.add(user)
+    db.flush()
+    for event in ("application_ready", "application_submitted", "application_failed", "agent_error", "scan_completed"):
+        notify(db, user, event, event)
+    assert sent == []
+    notify(db, user, "interview_scheduled", "Interview")
+    notify(db, user, "offer_received", "Offer")
+    assert sent == ["[AutoApply AI] Interview", "[AutoApply AI] Offer"]

@@ -44,7 +44,7 @@ with prep notes, and shows you what is working.
 **Discovery.** Scans Greenhouse, Lever, Ashby and Workday boards through their public APIs, reads
 company careers pages (schema.org `JobPosting` markup, and embedded ATS boards it detects), and
 searches LinkedIn, Indeed, Glassdoor and Wellfound with a real browser. It removes duplicates across
-sources, and scans run on a schedule (every 6 hours by default) or when you click **Scan for jobs now**.
+sources, and scans run on a schedule (every 3 hours by default) or when you click **Scan for jobs now**.
 You can also paste any job URL.
 
 **Matching.** Each job gets a 0–100 score across five parts: skills, experience, industry, location

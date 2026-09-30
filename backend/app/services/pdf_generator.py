@@ -41,12 +41,12 @@ def _register_fonts() -> None:
     _fonts_registered = True
 
 
-def _styles(template: str) -> dict[str, ParagraphStyle]:
+def _styles(template: str, scale: float = 1.0) -> dict[str, ParagraphStyle]:
     _register_fonts()
     base = getSampleStyleSheet()
     accent = ACCENTS.get(template, ACCENTS["classic"])
     font, bold = FONT, FONT_BOLD
-    return {
+    styles = {
         "name": ParagraphStyle("name", parent=base["Title"], fontName=bold, fontSize=20, leading=24,
                                alignment=TA_CENTER, textColor=accent, spaceAfter=2),
         "contact": ParagraphStyle("contact", parent=base["Normal"], fontName=font, fontSize=9.5, leading=12,
@@ -60,6 +60,11 @@ def _styles(template: str) -> dict[str, ParagraphStyle]:
         "bullet": ParagraphStyle("bullet", parent=base["Normal"], fontName=font, fontSize=9.5, leading=12.5,
                                  leftIndent=14, bulletIndent=3, bulletFontName=font, spaceAfter=1),
     }
+    if scale != 1.0:
+        for style in styles.values():
+            for attr in ("fontSize", "leading", "spaceBefore", "spaceAfter"):
+                setattr(style, attr, getattr(style, attr) * scale)
+    return styles
 
 
 def _p(text: str, style: ParagraphStyle) -> Paragraph:
@@ -73,16 +78,27 @@ def _dates(start: str, end: str) -> str:
 
 
 def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_size: str = "letter") -> bytes:
+    pdf, pages = _render_resume(content, template, page_size, compact=False)
+    if pages == 2:
+        # Slightly over one page: a tighter layout usually fits, and one page is what recruiters expect.
+        compact_pdf, compact_pages = _render_resume(content, template, page_size, compact=True)
+        if compact_pages == 1:
+            return compact_pdf
+    return pdf
+
+
+def _render_resume(content: dict[str, Any], template: str, page_size: str, compact: bool) -> tuple[bytes, int]:
     resume = ResumeContent.model_validate(content or {})
-    st = _styles(template)
+    st = _styles(template, scale=0.9 if compact else 1.0)
+    side, vertical = (0.5, 0.35) if compact else (0.7, 0.55)
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
         pagesize=A4 if page_size.lower() == "a4" else LETTER,
-        leftMargin=0.7 * inch,
-        rightMargin=0.7 * inch,
-        topMargin=0.55 * inch,
-        bottomMargin=0.55 * inch,
+        leftMargin=side * inch,
+        rightMargin=side * inch,
+        topMargin=vertical * inch,
+        bottomMargin=vertical * inch,
         title=f"{resume.personal_info.name or 'Resume'} - Resume",
         author=resume.personal_info.name or "",
     )
@@ -123,8 +139,11 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
         for proj in resume.projects:
             head = proj.name + (f" ({proj.url})" if proj.url else "")
             block = [_p(head, st["entry"])]
-            if proj.description:
-                block.append(_p(proj.description, st["body"]))
+            lines = [ln.strip() for ln in proj.description.splitlines() if ln.strip()]
+            if len(lines) > 1:
+                block.extend(bullets(lines))
+            elif lines:
+                block.append(_p(lines[0], st["body"]))
             if proj.technologies:
                 block.append(_p("Technologies: " + ", ".join(proj.technologies), st["meta"]))
             block.append(Spacer(1, 4))
@@ -169,7 +188,7 @@ def render_resume_pdf(content: dict[str, Any], template: str = "classic", page_s
         story.extend(bullets(resume.awards))
 
     doc.build(story)
-    return buf.getvalue()
+    return buf.getvalue(), doc.page
 
 
 def render_cover_letter_pdf(text: str, candidate: dict[str, Any] | None = None) -> bytes:

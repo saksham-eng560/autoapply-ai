@@ -19,17 +19,21 @@ logger = logging.getLogger(__name__)
 
 ALL = frozenset({"dashboard", "email", "chat"})
 
-# Event -> channels, mirroring the matrix in PLAN.md §18.
+NO_EMAIL = frozenset({"dashboard", "chat"})
+
+# Event -> channels, based on the matrix in PLAN.md §18. E-mail is reserved for events that need
+# you soon (interviews, offers, expired logins); routine per-application events would otherwise
+# flood the inbox (up to max_applications_per_day "ready" mails, plus errors, every scan).
 EVENT_CHANNELS: dict[str, frozenset[str]] = {
-    "application_ready": ALL,
-    "application_submitted": frozenset({"dashboard", "chat"}),
-    "application_failed": ALL,
+    "application_ready": NO_EMAIL,
+    "application_submitted": NO_EMAIL,
+    "application_failed": NO_EMAIL,
     "recruiter_email": frozenset({"dashboard", "chat"}),
     "interview_scheduled": ALL,
     "interview_reminder_24h": ALL,
     "interview_reminder_1h": frozenset({"dashboard", "email"}),
     "session_expired": ALL,
-    "agent_error": ALL,
+    "agent_error": NO_EMAIL,
     "weekly_summary": frozenset({"email", "chat"}),
     "offer_received": ALL,
     "scan_completed": frozenset({"dashboard"}),

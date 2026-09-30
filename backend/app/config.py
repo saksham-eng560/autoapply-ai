@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     SCREENSHOT_FULL_PAGE: bool = True
 
     # ---- Agent behaviour ----
-    SCAN_INTERVAL_HOURS: int = 6
+    SCAN_INTERVAL_HOURS: int = 3
     EMAIL_POLL_MINUTES: int = 5
     MAX_JOBS_PER_SOURCE: int = 50
     MAX_LLM_EVALUATIONS_PER_SCAN: int = 40

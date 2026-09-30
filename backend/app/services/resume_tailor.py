@@ -203,6 +203,19 @@ def heuristic_tailor(master: dict[str, Any], job: Job) -> tuple[dict[str, Any], 
     return normalize_resume(out), changes
 
 
+# Keeps a tailored resume to about one page; the most relevant projects come first.
+MAX_TAILORED_PROJECTS = 3
+
+
+def _limit_projects(tailored: dict[str, Any], changes: list[str]) -> dict[str, Any]:
+    projects = tailored.get("projects") or []
+    if len(projects) > MAX_TAILORED_PROJECTS:
+        tailored["projects"] = projects[:MAX_TAILORED_PROJECTS]
+        dropped = ", ".join(p["name"] for p in projects[MAX_TAILORED_PROJECTS:])
+        changes.append(f"Kept the {MAX_TAILORED_PROJECTS} most relevant projects (left out: {dropped})")
+    return tailored
+
+
 def tailor_resume(master: dict[str, Any], job: Job) -> dict[str, Any]:
     """Return {"tailored_resume", "changes_made", "violations", "method"}."""
     master = normalize_resume(master)
@@ -223,9 +236,11 @@ def tailor_resume(master: dict[str, Any], job: Job) -> dict[str, Any]:
             )
             tailored, violations = enforce_truthfulness(master, data.get("tailored_resume") or {})
             changes = [str(c) for c in (data.get("changes_made") or [])]
+            tailored = _limit_projects(tailored, changes)
             return {"tailored_resume": tailored, "changes_made": changes, "violations": violations, "method": "llm"}
         except LLMError as exc:
             logger.warning("LLM tailoring failed for job %s; using heuristic: %s", job.id, exc)
     tailored, changes = heuristic_tailor(master, job)
     tailored, violations = enforce_truthfulness(master, tailored)
+    tailored = _limit_projects(tailored, changes)
     return {"tailored_resume": tailored, "changes_made": changes, "violations": violations, "method": "heuristic"}
