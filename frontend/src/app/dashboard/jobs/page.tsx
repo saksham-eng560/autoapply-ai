@@ -5,6 +5,8 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Briefcase, Building2, ExternalLink, Link2, MapPin, Plus, RefreshCw, Search, Wand2 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { IAppliedButton, canSelfApply } from "@/components/i-applied-button";
+import { Stagger, StaggerItem } from "@/components/motion";
 import { JobMatchBadge } from "@/components/job-match-badge";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -49,6 +51,9 @@ function JobDialog({ jobId, onClose, onChanged }: { jobId: string | null; onClos
         <>
           <a href={job.source_url} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline" })}>Posting <ExternalLink /></a>
           <Button variant="outline" onClick={() => act("evaluate")} loading={busy === "evaluate"}><RefreshCw /> Re-evaluate</Button>
+          {job.application && canSelfApply(job.application.status) && (
+            <IAppliedButton applicationId={job.application.id} size="default" onApplied={() => { mutate(); onChanged(); }} />
+          )}
           {job.application && PREPARABLE.includes(job.application.status) ? (
             <Button onClick={() => act("prepare")} loading={busy === "prepare"}><Wand2 /> Prepare application</Button>
           ) : job.application && (
@@ -168,10 +173,10 @@ export default function JobsPage() {
           <div className="p-6"><EmptyState icon={Briefcase} title="No jobs yet" description="Configure your job sources in Settings, then run a scan from the Overview page — or add a job by URL."
             action={<Button variant="outline" onClick={() => setImportOpen(true)}><Link2 /> Add job by URL</Button>} /></div>
         )}
-        <ul className={data && isLoading ? "opacity-60" : undefined}>
+        <Stagger as="ul" key={`${sort}-${page}-${platform}-${remote}-${minScore}`} className={data && isLoading ? "opacity-60" : undefined}>
           {data?.items.map((job) => (
-            <li key={job.id}>
-              <button onClick={() => setSelected(job.id)} className="flex w-full items-center gap-4 border-b px-4 py-3 text-left last:border-0 hover:bg-accent/50">
+            <StaggerItem as="li" key={job.id} className="flex items-center border-b transition-colors last:border-0 hover:bg-accent/50">
+              <button onClick={() => setSelected(job.id)} className="flex min-w-0 flex-1 items-center gap-4 px-4 py-3 text-left">
                 <JobMatchBadge score={job.application?.match_score} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{job.role_title}</p>
@@ -188,9 +193,12 @@ export default function JobsPage() {
                 </div>
                 {job.application && <StatusBadge status={job.application.status} />}
               </button>
-            </li>
+              {job.application && canSelfApply(job.application.status) && (
+                <IAppliedButton applicationId={job.application.id} className="mr-4 hidden md:inline-flex" onApplied={() => mutate()} />
+              )}
+            </StaggerItem>
           ))}
-        </ul>
+        </Stagger>
       </div>
       {data && data.total > 25 && (
         <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">

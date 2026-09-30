@@ -1,12 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import { Search, Send } from "lucide-react";
+import { CheckCheck, Search, Send } from "lucide-react";
 import { ApplicationCard } from "@/components/application-card";
 import { EmptyState } from "@/components/empty-state";
+import { Stagger, StaggerItem } from "@/components/motion";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,7 +40,8 @@ function ApplicationsInner() {
 
   return (
     <div>
-      <PageHeader title="Applications" description="Every application the agent has prepared, submitted or tracked." />
+      <PageHeader title="Applications" description="Every application the agent has prepared, submitted or tracked. Applied somewhere yourself? Click “I Applied” on it and it's tracked too."
+        actions={<Link href="/dashboard/applied" className={buttonVariants({ variant: "outline" })}><CheckCheck /> I Applied{data?.self_applied_total ? ` · ${data.self_applied_total}` : ""}</Link>} />
       <div className="mb-4 flex flex-wrap gap-2">
         {FILTERS.map((f) => (
           <button key={f.key} onClick={() => { setFilter(f.key); setPage(1); router.replace(`/dashboard/applications${f.key === "all" ? "" : `?status=${f.key}`}`); }}
@@ -66,7 +69,11 @@ function ApplicationsInner() {
         {!isLoading && !data?.items.length && (
           <EmptyState icon={Send} title="No applications here" description="Run a scan from the Overview page, or add a job by URL on the Jobs page." />
         )}
-        {data?.items.map((app) => <ApplicationCard key={app.id} app={app} />)}
+        {!!data?.items.length && (
+          <Stagger key={`${filter}-${page}`} className="space-y-3">
+            {data.items.map((app) => <StaggerItem key={app.id}><ApplicationCard app={app} /></StaggerItem>)}
+          </Stagger>
+        )}
       </div>
       {data && data.total > 20 && (
         <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">

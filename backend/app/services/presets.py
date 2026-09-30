@@ -11,7 +11,7 @@ import copy
 import re
 from typing import Any
 
-from app.models.user import merge_preferences
+from app.models.user import DEFAULT_PREFERENCES, merge_preferences
 
 STARTUP_GREENHOUSE = [
     "anthropic", "figma", "vercel", "verkada", "scaleai", "robinhood", "cloudflare", "togetherai", "cresta",
@@ -61,7 +61,8 @@ def intern_roles(current: list[str] | None) -> list[str]:
     return _union(out, [])
 
 
-PRESETS = ("internships", "startups", "new-grad")
+PRESETS = ("internships", "startups", "new-grad", "india-internships")
+INDIA_PLATFORMS = ["internshala", "linkedin", "indeed", "internships", "greenhouse", "lever", "ashby", "generic"]
 
 
 def apply_preset(prefs: dict[str, Any], name: str) -> dict[str, Any]:
@@ -83,7 +84,19 @@ def apply_preset(prefs: dict[str, Any], name: str) -> dict[str, Any]:
         "remote_preference": "any",
         "scan_interval_hours": min(int(current.get("scan_interval_hours") or 6), 6),
     }
-    if name == "internships":
+    if name == "india-internships":  # Summer 2027 internships, ~90% in India with Delhi NCR first
+        sources["internship_lists"] = _union(sources.get("internship_lists"), ["simplify-internships", "vanshb03-internships"])
+        update.update({
+            "target_roles": intern_roles(current.get("target_roles")),
+            "job_types": ["internship"],
+            "experience_level": ["internship"],
+            "internship_season": "Summer 2027",
+            "location_focus": copy.deepcopy(DEFAULT_PREFERENCES["location_focus"]),
+            "target_locations": ["Delhi, India", "India"],
+            "platforms": _union(INDIA_PLATFORMS, current.get("platforms") or []),
+            "timezone": "Asia/Kolkata",
+        })
+    elif name == "internships":
         sources["internship_lists"] = _union(sources.get("internship_lists"), ["simplify-internships", "vanshb03-internships"])
         update.update({
             "target_roles": intern_roles(current.get("target_roles")),

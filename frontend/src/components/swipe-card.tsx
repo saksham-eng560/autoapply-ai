@@ -2,14 +2,14 @@
 
 import { forwardRef, useImperativeHandle, useState } from "react";
 import { animate, motion, useMotionValue, useTransform, type PanInfo } from "framer-motion";
-import { AlertTriangle, ArrowUpRight, Building2, CalendarDays, Globe2, Loader2, MapPin } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Building2, CalendarDays, Globe2, Loader2, MapPin, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewCard } from "@/lib/types";
 import { PLATFORM_LABELS, cn, formatSalary, timeAgo, titleCase } from "@/lib/utils";
 
 export type Decision = "keep" | "skip";
-export type SwipeCardHandle = { fling: (decision: Decision) => Promise<void> };
+export type SwipeCardHandle = { fling: (decision: Decision) => Promise<void>; flyUp: () => Promise<void> };
 
 const THRESHOLD = 120;
 // [score key, label, short label for narrow cards]
@@ -34,7 +34,9 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
   disabled?: boolean;
 }>(function SwipeCard({ card, onDecide, onLoadDetails, disabled }, ref) {
   const x = useMotionValue(0);
+  const y = useMotionValue(0);
   const rotate = useTransform(x, [-320, 320], [-12, 12]);
+  const appliedOpacity = useTransform(y, [-140, -20], [1, 0]);
   const keepOpacity = useTransform(x, [30, THRESHOLD], [0, 1]);
   const skipOpacity = useTransform(x, [-THRESHOLD, -30], [1, 0]);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -44,7 +46,11 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
     await animate(x, dir * (typeof window !== "undefined" ? window.innerWidth : 900), { duration: 0.28, ease: [0.4, 0, 1, 1] });
     onDecide(decision);
   };
-  useImperativeHandle(ref, () => ({ fling }));
+  // "I Applied": the card lifts off the deck instead of going left or right.
+  const flyUp = async () => {
+    await animate(y, -(typeof window !== "undefined" ? window.innerHeight : 900), { duration: 0.42, ease: [0.4, 0, 1, 1] });
+  };
+  useImperativeHandle(ref, () => ({ fling, flyUp }));
 
   const onDragEnd = (_: unknown, info: PanInfo) => {
     if (info.offset.x > THRESHOLD || info.velocity.x > 700) void fling("keep");
@@ -62,7 +68,7 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
       drag={disabled ? false : "x"}
       dragMomentum={false}
       onDragEnd={onDragEnd}
-      style={{ x, rotate }}
+      style={{ x, y, rotate }}
       whileDrag={{ cursor: "grabbing" }}
       className="absolute inset-0 flex cursor-grab touch-pan-y select-none flex-col overflow-hidden border border-foreground/70 bg-background shadow-2xl"
       aria-label={`${job.role_title} at ${job.company_name}`}
@@ -71,6 +77,10 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
       <motion.span style={{ opacity: keepOpacity }}
         className="pointer-events-none absolute left-6 top-24 z-10 -rotate-12 border-4 border-primary bg-background/80 px-4 py-1 font-display text-3xl text-primary">
         KEEP
+      </motion.span>
+      <motion.span style={{ opacity: appliedOpacity }}
+        className="pointer-events-none absolute left-1/2 top-24 z-10 -translate-x-1/2 border-4 border-success bg-background/80 px-4 py-1 font-display text-3xl text-success">
+        APPLIED
       </motion.span>
       <motion.span style={{ opacity: skipOpacity }}
         className="pointer-events-none absolute right-6 top-24 z-10 rotate-12 border-4 border-foreground bg-background/80 px-4 py-1 font-display text-3xl text-foreground">
@@ -101,6 +111,7 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
 
       <div className="flex-1 space-y-5 overflow-y-auto p-5 scrollbar-thin sm:p-6">
         <div className="flex flex-wrap gap-1.5">
+          <FocusBadges card={card} />
           {job.job_type && <Badge tone="outline">{titleCase(job.job_type)}</Badge>}
           {job.terms?.map((t) => <Badge key={t} tone="outline"><CalendarDays className="h-3 w-3" />{t}</Badge>)}
           {salary && <Badge tone="outline">{salary}</Badge>}
@@ -171,6 +182,21 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
     </motion.article>
   );
 });
+
+/** Where the job sits in your location focus (e.g. Delhi NCR first) and whether it's the season you want. */
+function FocusBadges({ card }: { card: ReviewCard }) {
+  const f = card.focus;
+  if (!f) return null;
+  return (
+    <>
+      {f.location_tier === 0 && <Badge tone="primary"><MapPin className="h-3 w-3" />Prime location</Badge>}
+      {f.location_tier === 1 && f.country && <Badge tone="outline"><MapPin className="h-3 w-3" />{f.country}</Badge>}
+      {f.location_tier === 3 && f.country && <Badge tone="muted">Outside {f.country}</Badge>}
+      {f.season === "match" && f.season_label && <Badge tone="success"><Sparkles className="h-3 w-3" />{f.season_label}</Badge>}
+      {f.season === "immediate" && <Badge tone="muted">Starts immediately</Badge>}
+    </>
+  );
+}
 
 /** A static card peeking out under the top card. */
 export function DeckShadowCard({ card, depth }: { card: ReviewCard; depth: number }) {

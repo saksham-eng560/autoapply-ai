@@ -23,8 +23,10 @@ from app.schemas.user import (
 )
 from app.services.google_oauth import has_scope
 from app.services.llm import get_llm
+from app.services.location_focus import get_season
 from app.services.presets import apply_preset
 from app.services.privacy import delete_user_data, export_user_data
+from app.services.progress import send_now as send_progress_now
 from app.services.question_answerer import STANDARD_FIELDS
 from app.worker.dispatch import enqueue
 
@@ -50,6 +52,26 @@ def get_preferences(user: CurrentUser) -> dict:
     return user.prefs
 
 
+def _validate_focus(prefs: dict) -> None:  # type: ignore[type-arg]
+    focus = prefs.get("location_focus")
+    if focus is not None:
+        if not isinstance(focus, dict):
+            raise HTTPException(422, "location_focus must be an object")
+        share = focus.get("country_share", 90)
+        if not isinstance(share, int) or not 0 <= share <= 100:
+            raise HTTPException(422, "location_focus.country_share must be 0-100")
+        cities = focus.get("prime_cities") or []
+        if not isinstance(cities, list) or not all(isinstance(c, str) for c in cities) or len(cities) > 50:
+            raise HTTPException(422, "location_focus.prime_cities must be a list of city names")
+        if not isinstance(focus.get("country") or "", str):
+            raise HTTPException(422, "location_focus.country must be text")
+    season = prefs.get("internship_season")
+    if season and (not isinstance(season, str) or get_season({"internship_season": season}) is None):
+        raise HTTPException(422, "internship_season must look like 'Summer 2027' (or be empty)")
+    if prefs.get("progress_digest") not in ("daily", "weekly", "off"):
+        raise HTTPException(422, "progress_digest must be 'daily', 'weekly' or 'off'")
+
+
 @router.put("/preferences")
 def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     unknown = set(body.preferences) - ALLOWED_PREF_KEYS
@@ -72,8 +94,15 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     per_source = prefs.get("max_jobs_per_source")
     if per_source is not None and (not isinstance(per_source, int) or not 10 <= per_source <= 1000):
         raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
+    _validate_focus(prefs)
     user.preferences = prefs
     return prefs
+
+
+@router.post("/progress-report")
+def progress_report(user: CurrentUser, db: DB) -> dict:
+    """Send the progress digest now (Gmail + dashboard + Discord/Slack), covering the last 7 days."""
+    return {"sent": send_progress_now(db, user, days=7)}
 
 
 @router.post("/preferences/preset/{name}")

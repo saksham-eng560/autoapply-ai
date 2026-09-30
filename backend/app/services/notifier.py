@@ -18,6 +18,7 @@ from app.models.user import Notification, User
 logger = logging.getLogger(__name__)
 
 ALL = frozenset({"dashboard", "email", "chat"})
+NOTIFICATION_SUBJECT_PREFIX = "[AutoApply AI]"  # the Gmail monitor ignores these
 
 # Event -> channels, mirroring the matrix in PLAN.md §18.
 EVENT_CHANNELS: dict[str, frozenset[str]] = {
@@ -35,7 +36,14 @@ EVENT_CHANNELS: dict[str, frozenset[str]] = {
     "scan_completed": frozenset({"dashboard"}),
     "linkedin_profile_changed": frozenset({"dashboard", "email"}),
     "status_changed": frozenset({"dashboard"}),
+    "self_applied": ALL,
+    "progress_digest": frozenset({"dashboard", "email", "chat"}),
 }
+
+# Updates about an application you made. With the "progress_updates_everywhere" preference (on by default)
+# they reach every channel: dashboard + browser, your Gmail, and Discord/Slack when connected.
+PROGRESS_EVENTS = frozenset({"application_submitted", "self_applied", "recruiter_email", "status_changed",
+                             "interview_scheduled", "offer_received"})
 
 
 def _user_channels(user: User) -> set[str]:
@@ -110,6 +118,8 @@ def notify(
     channels = EVENT_CHANNELS.get(event_type, frozenset({"dashboard"}))
     user_channels = _user_channels(user)
     prefs = user.prefs
+    if event_type in PROGRESS_EVENTS and prefs.get("progress_updates_everywhere", True):
+        channels = ALL
     notification: Notification | None = None
 
     if "dashboard" in channels:
@@ -126,7 +136,7 @@ def notify(
         )
 
     if "email" in channels and "email" in user_channels:
-        send_email(user.email, f"[AutoApply AI] {title}", f"{body}\n\n{_absolute(link) or ''}".strip(), db, user)
+        send_email(user.email, f"{NOTIFICATION_SUBJECT_PREFIX} {title}", f"{body}\n\n{_absolute(link) or ''}".strip(), db, user)
 
     if "chat" in channels:
         targets = []

@@ -22,6 +22,14 @@ from app.models.enums import ApplicationStatus, JobType
 from app.models.job import Job
 from app.models.user import User
 from app.services import agent_orchestrator as orch
+from app.services.location_focus import (
+    get_focus,
+    get_season,
+    location_tier,
+    location_tier_sql,
+    season_rank_sql,
+    season_status,
+)
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -66,10 +74,29 @@ def _queue_query(user: User, min_score: int | None = None, job_type: str | None 
     return query
 
 
-def _card(app: Application) -> dict:
+def _focus_order(prefs: dict) -> list:  # type: ignore[type-arg]
+    order = []
+    focus = get_focus(prefs)
+    if focus is not None:
+        order.append(location_tier_sql(Job.location, Job.is_remote, focus))
+    season = get_season(prefs)
+    if season is not None:
+        order.append(season_rank_sql(Job.role_title, Job.description, season))
+    return order
+
+
+def _card(app: Application, prefs: dict | None = None) -> dict:  # type: ignore[type-arg]
     job = app.job
     details = app.match_details or {}
+    focus, season = (get_focus(prefs), get_season(prefs)) if prefs is not None else (None, None)
     return {
+        "focus": {
+            "location_tier": location_tier(job.location, job.is_remote, focus) if focus else None,
+            "season": season_status(job.role_title, job.description, (job.raw_data or {}).get("terms"), season)[0]
+            if season else None,
+            "season_label": season.label if season else None,
+            "country": focus.country.title() if focus else None,
+        },
         "application_id": str(app.id),
         "status": app.status.value,
         "match_score": app.match_score,
@@ -118,13 +145,14 @@ def queue(
     q: str | None = None,
 ) -> dict:
     filtered = _queue_query(user, min_score, job_type, remote, q)
+    prefs = user.prefs
     query = filtered.order_by(
+        *_focus_order(prefs),  # prime city first, then the rest of the focus country; the target season first
         Application.match_score.desc().nulls_last(), Job.posted_date.desc().nulls_last(), Job.discovered_at.desc(),
         Application.id)  # stable order: refetches must not reshuffle the deck
     apps = db.scalars(query.limit(limit)).all()
-    prefs = user.prefs
     return {
-        "items": [_card(a) for a in apps],
+        "items": [_card(a, prefs) for a in apps],
         "matching": db.scalar(select(func.count()).select_from(filtered.subquery())) or 0,
         "stats": _stats(db, user),
         "settings": {"auto_submit_kept": bool(prefs.get("auto_submit_kept", True)),
@@ -172,7 +200,7 @@ def undo(application_id: str, user: CurrentUser, db: DB) -> dict:
         orch.undo_review(db, app)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return {"card": _card(app), "stats": _stats(db, user)}
+    return {"card": _card(app, user.prefs), "stats": _stats(db, user)}
 
 
 @router.post("/{application_id}/details")
@@ -180,4 +208,4 @@ def details(application_id: str, user: CurrentUser, db: DB) -> dict:
     """Fetch the full description for a listing that only carries a title (curated lists)."""
     app = _get(db, user, application_id)
     orch.enrich_job(db, app.job)
-    return _card(app)
+    return _card(app, user.prefs)

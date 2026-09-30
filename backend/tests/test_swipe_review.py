@@ -124,6 +124,8 @@ def test_review_queue_decisions(auth_client: TestClient, master_resume: dict, mo
     monkeypatch.setattr("app.worker.dispatch.enqueue", lambda *a, **k: queued.append(a))
     email = auth_client.get("/api/v1/auth/me").json()["email"]
     ids = _seed_queue(email)
+    # Score order on its own (the India / Delhi location focus is tested in test_location_focus.py)
+    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"location_focus": {"enabled": False}}})
 
     deck = auth_client.get("/api/v1/review/queue").json()
     assert [c["match_score"] for c in deck["items"]] == [85, 70, 55, 40]  # best first

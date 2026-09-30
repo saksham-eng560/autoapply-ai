@@ -10,6 +10,7 @@ from app.scrapers.generic import GenericScraper
 from app.scrapers.glassdoor import GlassdoorScraper
 from app.scrapers.greenhouse import GreenhouseScraper
 from app.scrapers.indeed import IndeedScraper
+from app.scrapers.internshala import InternshalaScraper
 from app.scrapers.internships import InternshipListScraper
 from app.scrapers.lever import LeverScraper
 from app.scrapers.linkedin import LinkedInScraper
@@ -17,6 +18,7 @@ from app.scrapers.wellfound import WellfoundScraper
 from app.scrapers.workday import WorkdayScraper
 
 SCRAPERS: dict[str, type[BaseScraper]] = {
+    "internshala": InternshalaScraper,
     "internships": InternshipListScraper,
     "greenhouse": GreenhouseScraper,
     "lever": LeverScraper,
@@ -46,6 +48,8 @@ def fetch_job_from_url(url: str) -> ScrapedJob | None:
     """Import a single posting from any supported URL (used by "Add job by URL")."""
     platform = detect_ats_platform(url)
     name = PLATFORM_TO_SCRAPER.get(platform, "generic")
+    if "internshala.com/" in url:
+        name = "internshala"
     job = get_scraper(name).fetch_job(url)
     if job is None and name != "generic":
         job = get_scraper("generic").fetch_job(url)

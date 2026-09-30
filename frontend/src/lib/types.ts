@@ -31,7 +31,12 @@ export interface Preferences {
     workday_sites: string[];
     career_pages: string[];
     internship_lists?: string[];
+    internshala_urls?: string[];
   };
+  location_focus?: LocationFocus;
+  internship_season?: string | null;
+  progress_updates_everywhere?: boolean;
+  progress_digest?: "daily" | "weekly" | "off";
   review_mode: "swipe" | "auto";
   auto_submit_kept: boolean;
   trust_generated_answers: boolean;
@@ -45,6 +50,13 @@ export interface Preferences {
   cover_letter_enabled: boolean;
   resume_template?: string;
   auto_draft_replies?: boolean;
+}
+
+export interface LocationFocus {
+  enabled?: boolean;
+  country: string;
+  prime_cities: string[];
+  country_share: number;
 }
 
 export interface User {
@@ -170,6 +182,8 @@ export interface ApplicationSummary {
   updated_at: string;
   submitted_at: string | null;
   job: Job | null;
+  /** You clicked "I Applied" (applied on your own) rather than the agent submitting it. */
+  self_applied?: boolean;
 }
 
 export interface Communication {
@@ -284,6 +298,8 @@ export interface ReviewCard {
   scores: Partial<Record<"skills_match" | "experience_match" | "industry_match" | "location_match" | "compensation_match", number>>;
   job: Job & { description: string; sponsorship: string | null; terms: string[]; listing_source: string | null };
   discovered_at: string | null;
+  /** 0 = prime city (e.g. Delhi NCR), 1 = rest of the focus country, 2 = remote / unknown, 3 = abroad. */
+  focus?: { location_tier: number | null; season: string | null; season_label: string | null; country: string | null };
 }
 
 export interface ReviewStats {
@@ -352,4 +368,5 @@ export interface Paginated<T> {
   page: number;
   page_size?: number;
   counts?: Record<string, number>;
+  self_applied_total?: number;
 }

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { ArrowUpRight, Check, Play, ShieldCheck, X } from "lucide-react";
 import { BrushHeadline, Logo, Seal, TagPile, TunnelGrid } from "@/components/brand";
+import { PipelineMotion } from "@/components/motion-graphics";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const SOURCES = ["Greenhouse", "Lever", "Ashby", "Workday", "LinkedIn", "Wellfound", "Indeed", "Simplify lists", "Career pages"];
+const SOURCES = ["Internshala", "Greenhouse", "Lever", "Ashby", "Workday", "LinkedIn", "Wellfound", "Indeed", "Simplify lists", "Career pages"];
 
 const STEPS = [
   { n: "01", title: "Scan", text: "Thousands of live internships from curated GitHub lists, 110+ startup boards, LinkedIn, Indeed and any careers page — every 6 hours." },
@@ -115,6 +116,21 @@ export default function Landing() {
               </div>
             ))}
           </div>
+        </section>
+
+        {/* ---------------------------------------------------------------- the loop (motion graphic) */}
+        <section aria-labelledby="loop-title" className="border-b border-line/70">
+          <div className="flex flex-col justify-between gap-4 px-5 pt-14 sm:px-10 md:flex-row md:items-end">
+            <div>
+              <p className="label-caps text-primary">The loop</p>
+              <h2 id="loop-title" className="display mt-4 text-4xl sm:text-5xl">Always on.<br />Always tracking.</h2>
+            </div>
+            <p className="max-w-md text-muted-foreground">
+              Summer 2027 internships, Delhi NCR first and India above all, flow through the agent every few hours. Applied
+              somewhere yourself? Hit “I Applied” and it&apos;s tracked right alongside the rest.
+            </p>
+          </div>
+          <PipelineMotion className="px-5 pb-14 pt-12 sm:px-10" />
         </section>
 
         {/* ---------------------------------------------------------------- swipe preview */}

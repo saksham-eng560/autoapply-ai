@@ -13,19 +13,21 @@ import { Modal } from "@/components/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { useIntegrations, useMe } from "@/hooks/use-applications";
 import { ApiError, api, del, fetcher, patch, post, put } from "@/lib/api-client";
-import type { FieldMapping, Preferences, StandardField } from "@/lib/types";
+import type { FieldMapping, LocationFocus, Preferences, StandardField } from "@/lib/types";
 import { PLATFORM_LABELS, cn, timeAgo } from "@/lib/utils";
 
-const ALL_PLATFORMS = ["internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
+const ALL_PLATFORMS = ["internshala", "internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
 const pill = (on: boolean) => cn("rounded-full border px-3 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
   on ? "border-primary bg-primary text-primary-foreground" : "border-foreground/30 hover:border-foreground");
 
 const PRESETS = [
+  { name: "india-internships", title: "India · Summer 2027", text: "Internships only, ~90% in India with Delhi NCR first: Internshala, LinkedIn India and Indeed India, plus the Summer 2027 lists." },
   { name: "internships", title: "Internships", text: "Intern roles, 4,000+ curated listings (SimplifyJobs, vanshb03) plus 110 startup boards, 100 applications/day." },
   { name: "startups", title: "Startups", text: "Adds 110 startup Greenhouse, Ashby and Lever boards to your sources, keeps your roles and job types." },
   { name: "new-grad", title: "New grad", text: "Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards." },
@@ -68,7 +70,7 @@ function MassApplyPanel() {
           <CardTitle>One-click presets</CardTitle>
           <CardDescription>Presets extend your settings — your own roles, boards and exclusions are kept.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-px border-t bg-border p-0 md:grid-cols-3">
+        <CardContent className="grid gap-px border-t bg-border p-0 md:grid-cols-2 xl:grid-cols-4">
           {PRESETS.map((p) => (
             <div key={p.name} className="flex flex-col bg-card p-5">
               <p className="display text-xl">{p.title}</p>
@@ -211,6 +213,9 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
           <Row label="Company careers pages" hint="Any careers page — the agent reads JSON-LD job postings and follows embedded ATS boards.">
             <TagInput value={prefs.sources.career_pages} onChange={(v) => setSource("career_pages", v)} placeholder="https://company.com/careers" />
           </Row>
+          <Row label="Internshala searches" hint="Optional: paste any Internshala search URL (filters and all). Without these the agent searches your roles in your prime cities, work-from-home and all of India. You apply on Internshala yourself, then click “I Applied”.">
+            <TagInput value={prefs.sources.internshala_urls || []} onChange={(v) => setSource("internshala_urls", v)} placeholder="https://internshala.com/internships/python-django-internship-in-delhi/" />
+          </Row>
           <div className="pt-4"><Button onClick={save} loading={saving}><Save /> Save sources</Button></div>
         </CardContent>
       </Card>
@@ -218,6 +223,8 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
   }
 
   return (
+    <div className="space-y-6">
+    <FocusCard prefs={prefs} setPrefs={setPrefs} onSave={save} saving={saving} />
     <Card>
       <CardHeader>
         <CardTitle>Search preferences</CardTitle>
@@ -292,6 +299,53 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
           <Input className="max-w-xs" value={prefs.timezone} onChange={(e) => set("timezone", e.target.value)} placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone} />
         </Row>
         <div className="pt-4"><Button onClick={save} loading={saving}><Save /> Save preferences</Button></div>
+      </CardContent>
+    </Card>
+    </div>
+  );
+}
+
+const DEFAULT_FOCUS: LocationFocus = { enabled: true, country: "India", prime_cities: ["Delhi", "New Delhi", "Delhi NCR", "Gurugram", "Noida"], country_share: 90 };
+
+/** Internships for one season, mostly in one country, with prime cities first. */
+function FocusCard({ prefs, setPrefs, onSave, saving }: {
+  prefs: Preferences; setPrefs: (p: Preferences) => void; onSave: () => void; saving: boolean;
+}) {
+  const focus = { ...DEFAULT_FOCUS, ...(prefs.location_focus || {}) };
+  const setFocus = (patch: Partial<LocationFocus>) => setPrefs({ ...prefs, location_focus: { ...focus, ...patch } });
+  const internshipsOnly = prefs.job_types.length === 1 && prefs.job_types[0] === "internship";
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Internship focus</CardTitle>
+        <CardDescription>Which internships the agent hunts for, and where. Swipe Review shows your prime cities first.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Row label="Internships only" hint="Scan internships and nothing else for now. Turn off to add full-time roles back.">
+          <Switch checked={internshipsOnly} label="Internships only"
+            onCheckedChange={(v) => setPrefs({ ...prefs, job_types: v ? ["internship"] : ["internship", "full-time"], experience_level: v ? ["internship"] : prefs.experience_level })} />
+        </Row>
+        <Row label="Season" hint="Postings clearly for another term are skipped; ones that name this season come first. Leave empty for any season.">
+          <Input className="max-w-xs" value={prefs.internship_season || ""} placeholder="Summer 2027"
+            onChange={(e) => setPrefs({ ...prefs, internship_season: e.target.value || null })} />
+        </Row>
+        <Row label="Focus on one country" hint="Keeps most of every scan in this country; the rest can come from anywhere (remote roles first).">
+          <div className="flex flex-wrap items-center gap-3">
+            <Switch checked={focus.enabled !== false} onCheckedChange={(v) => setFocus({ enabled: v })} label="Focus on one country" />
+            <Input className="max-w-[12rem]" aria-label="Country" value={focus.country} onChange={(e) => setFocus({ country: e.target.value })} disabled={focus.enabled === false} />
+          </div>
+        </Row>
+        <Row label={`Share in ${focus.country || "the country"}`} hint="About this much of each scan's new internships is in the country.">
+          <div className="flex max-w-md items-center gap-4">
+            <Slider value={[focus.country_share]} min={50} max={100} step={5} disabled={focus.enabled === false}
+              onValueChange={(v) => setFocus({ country_share: v[0] })} aria-label="Share of internships in the country" />
+            <span className="w-12 text-right font-medium tabular-nums">{focus.country_share}%</span>
+          </div>
+        </Row>
+        <Row label="Prime cities" hint="Shown first in Swipe Review and searched first on Internshala, LinkedIn and Indeed.">
+          <TagInput value={focus.prime_cities} onChange={(v) => setFocus({ prime_cities: v })} placeholder="Delhi, Gurugram, Noida…" />
+        </Row>
+        <div className="pt-4"><Button onClick={onSave} loading={saving}><Save /> Save internship focus</Button></div>
       </CardContent>
     </Card>
   );
@@ -383,12 +437,14 @@ function IntegrationsPanel() {
   const [token, setToken] = useState<{ token: string; api_url: string } | null>(null);
   const [webhooks, setWebhooks] = useState({ discord: "", slack: "" });
   const [channels, setChannels] = useState<string[]>([]);
+  const [progress, setProgress] = useState<{ everywhere: boolean; digest: "daily" | "weekly" | "off" }>({ everywhere: true, digest: "daily" });
   const { saving, run } = useSaver();
   const toast = useToast();
   useEffect(() => {
     if (me) {
       setWebhooks({ discord: me.preferences.discord_webhook_url || "", slack: me.preferences.slack_webhook_url || "" });
       setChannels(me.preferences.notification_channels);
+      setProgress({ everywhere: me.preferences.progress_updates_everywhere ?? true, digest: me.preferences.progress_digest ?? "daily" });
     }
   }, [me]);
   if (!integ) return null;
@@ -482,11 +538,20 @@ function IntegrationsPanel() {
               toast({ title: result === "granted" ? "Browser notifications enabled" : "Permission not granted", tone: result === "granted" ? "success" : "error" });
             }}>Enable browser notifications</Button>
           </Row>
+          <Row label="Application updates everywhere" hint="Every update on a job you applied to (applied, reply, test, interview, offer, rejection) goes to Gmail, the dashboard and Discord/Slack, not just here.">
+            <Switch checked={progress.everywhere} onCheckedChange={(v) => setProgress({ ...progress, everywhere: v })} label="Application updates everywhere" />
+          </Row>
+          <Row label="Progress e-mail" hint="A summary of every application you've made: what changed, what's waiting, who to follow up with. Sent at about 8 PM in your time zone.">
+            <Select className="max-w-xs" value={progress.digest} onChange={(e) => setProgress({ ...progress, digest: e.target.value as typeof progress.digest })}>
+              <option value="daily">Daily</option><option value="weekly">Weekly (Sundays)</option><option value="off">Off</option>
+            </Select>
+          </Row>
           <Row label="Discord webhook URL"><Input value={webhooks.discord} onChange={(e) => setWebhooks({ ...webhooks, discord: e.target.value })} placeholder="https://discord.com/api/webhooks/…" /></Row>
           <Row label="Slack webhook URL"><Input value={webhooks.slack} onChange={(e) => setWebhooks({ ...webhooks, slack: e.target.value })} placeholder="https://hooks.slack.com/services/…" /></Row>
           <div className="pt-4">
             <Button loading={saving} onClick={() => run(async () => {
-              await put("/users/me/preferences", { preferences: { notification_channels: channels, discord_webhook_url: webhooks.discord || null, slack_webhook_url: webhooks.slack || null } });
+              await put("/users/me/preferences", { preferences: { notification_channels: channels, discord_webhook_url: webhooks.discord || null, slack_webhook_url: webhooks.slack || null,
+                progress_updates_everywhere: progress.everywhere, progress_digest: progress.digest } });
               await mutateMe();
               await mutate();
             })}><Save /> Save notifications</Button>

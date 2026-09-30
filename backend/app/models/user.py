@@ -18,26 +18,39 @@ if TYPE_CHECKING:
 DEFAULT_PREFERENCES: dict[str, Any] = {
     # --- PLAN.md §4 defaults ---
     "target_roles": [],
-    "target_locations": [],
-    "remote_preference": "hybrid",  # remote | hybrid | onsite | any
+    "target_locations": ["Delhi, India", "India"],
+    "remote_preference": "any",  # remote | hybrid | onsite | any
     "salary_min": None,
     "salary_max": None,
     "salary_currency": "USD",
-    "experience_level": [],
+    "experience_level": ["internship"],
     "industries": [],
     "company_size_preference": [],
     "companies_to_avoid": [],
     "companies_to_target": [],
     "max_applications_per_day": 25,
     "auto_apply_threshold": 80,
-    "job_types": ["full-time", "internship"],
+    "job_types": ["internship"],  # internships only for now; add "full-time" to widen
     "notification_channels": ["email", "dashboard"],
     # --- Extended settings ---
     "keywords_exclude": [],
     "posted_within_days": 14,
     "scan_enabled": True,
     "scan_interval_hours": 6,
-    "platforms": ["internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "generic"],
+    "platforms": ["internshala", "linkedin", "internships", "greenhouse", "lever", "ashby", "workday", "generic"],
+    # --- Where and when (services/location_focus.py) ---
+    # ~country_share % of each scan's new postings stay in the country; prime cities are shown first.
+    "location_focus": {
+        "enabled": True,
+        "country": "India",
+        "prime_cities": ["Delhi", "New Delhi", "Delhi NCR", "Gurugram", "Gurgaon", "Noida", "Greater Noida",
+                         "Faridabad", "Ghaziabad"],
+        "country_share": 90,
+    },
+    "internship_season": "Summer 2027",  # postings for another term are skipped; empty = any season
+    # --- Progress tracking ---
+    "progress_updates_everywhere": True,  # every application update goes to Gmail + dashboard + chat
+    "progress_digest": "daily",           # daily | weekly | off: e-mail summary of every application
     # --- Swipe Review / mass apply ---
     # "swipe": nothing is skipped for a low score; every job that passes your hard filters waits in
     #          Swipe Review, and the jobs you keep are prepared and applied to.
@@ -61,7 +74,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     },
     "discord_webhook_url": None,
     "slack_webhook_url": None,
-    "timezone": "UTC",
+    "timezone": "Asia/Kolkata",
     "cover_letter_enabled": True,
 }
 

@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSWRConfig } from "swr";
+import { LayoutGroup, motion } from "framer-motion";
 import {
-  BarChart3, Briefcase, CalendarDays, FileText, Inbox, Layers, LayoutDashboard, LogOut, Menu, ScrollText, Send,
+  BarChart3, Briefcase, CalendarDays, CheckCheck, FileText, Inbox, Layers, LayoutDashboard, LogOut, Menu, ScrollText, Send,
   Settings, type LucideIcon,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
@@ -33,6 +34,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/dashboard/review", label: "Swipe Review", icon: Layers, badge: "review" },
       { href: "/dashboard/applications", label: "Applications", icon: Send, badge: "pending" },
+      { href: "/dashboard/applied", label: "I Applied", icon: CheckCheck },
       { href: "/dashboard/jobs", label: "All jobs", icon: Briefcase },
     ],
   },
@@ -103,7 +105,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return 0;
   };
 
-  const nav = (
+  const renderNav = (scope: string) => (
+    <LayoutGroup id={scope}>
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto py-6 scrollbar-thin" aria-label="Dashboard">
       {NAV.map(({ section, items }) => (
         <div key={section}>
@@ -113,12 +116,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             const count = badgeFor(badge);
             return (
               <Link key={href} href={href} onClick={() => setMobileOpen(false)} aria-current={active ? "page" : undefined}
-                className={cn("group flex h-11 items-center gap-3 px-6 text-[12px] font-semibold uppercase tracking-[0.12em] transition-colors",
-                  active ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-accent hover:text-foreground")}>
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="flex-1 truncate">{label}</span>
+                className={cn("group relative flex h-11 items-center gap-3 px-6 text-[12px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  active ? "text-primary-foreground" : "text-foreground/75 hover:bg-accent hover:text-foreground")}>
+                {/* The red highlight slides from the old item to the new one */}
+                {active && <motion.span layoutId="nav-active" aria-hidden className="absolute inset-0 bg-primary"
+                  transition={{ type: "spring", stiffness: 520, damping: 42 }} />}
+                <Icon className="relative h-4 w-4 shrink-0 transition-transform duration-200 group-hover:translate-x-0.5" />
+                <span className="relative flex-1 truncate">{label}</span>
                 {count > 0 && (
-                  <span className={cn("min-w-6 rounded-full border px-1.5 text-center text-[10px] leading-5 tabular-nums",
+                  <span className={cn("relative min-w-6 rounded-full border px-1.5 text-center text-[10px] leading-5 tabular-nums",
                     active ? "border-primary-foreground/70" : badge === "review" ? "border-primary bg-primary text-primary-foreground" : "border-warning text-warning")}>
                     {count > 999 ? "999+" : count}
                   </span>
@@ -129,6 +135,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       ))}
     </nav>
+    </LayoutGroup>
   );
 
   const footer = (
@@ -152,7 +159,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     <div className="noise flex min-h-screen bg-background">
       <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-line/60 lg:flex">
         <div className="flex h-16 items-center border-b border-line/60 px-6"><Logo href="/dashboard" /></div>
-        {nav}
+        {renderNav("desktop-nav")}
         {footer}
       </aside>
 
@@ -160,7 +167,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <SheetContent side="left" className="flex w-[272px] flex-col gap-0 border-line/60 p-0">
           <SheetTitle className="flex h-16 items-center border-b border-line/60 px-6"><Logo href="/dashboard" /></SheetTitle>
           <SheetDescription className="sr-only">Dashboard navigation</SheetDescription>
-          {nav}
+          {renderNav("mobile-nav")}
           {footer}
         </SheetContent>
       </Sheet>

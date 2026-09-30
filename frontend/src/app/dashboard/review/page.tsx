@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { Check, FileText, Layers, Play, Radar, RotateCcw, Search, X } from "lucide-react";
+import { Check, CheckCheck, FileText, Layers, Play, Radar, RotateCcw, Search, X } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { AnimatedNumber } from "@/components/motion";
 import { PageHeader } from "@/components/page-header";
 import { DeckShadowCard, SwipeCard, type Decision, type SwipeCardHandle } from "@/components/swipe-card";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -37,7 +38,9 @@ function StatCell({ label, value, accent }: { label: string; value: number | str
   return (
     <div className="px-4 py-4 sm:px-5">
       <p className="label-caps text-[10px] text-muted-foreground">{label}</p>
-      <p className={cn("mt-2 font-display text-3xl leading-none tabular-nums", accent && "text-primary")}>{value}</p>
+      <p className={cn("mt-2 font-display text-3xl leading-none tabular-nums", accent && "text-primary")}>
+        {typeof value === "number" ? <AnimatedNumber value={value} /> : value}
+      </p>
     </div>
   );
 }
@@ -138,7 +141,26 @@ export default function SwipeReviewPage() {
     }
   }, [top, busy, noResume, decide]);
 
-  // Keyboard: ← skip, → keep, Z / Backspace undo.
+  // "I Applied": you applied to the top card yourself. It leaves the deck and is tracked in Applied.
+  const iApplied = useCallback(async () => {
+    if (!top || busy) return;
+    setBusy(true);
+    try {
+      await post(`/applications/${top.application_id}/mark-applied`);
+      if (topRef.current) await topRef.current.flyUp();
+      setDecided((prev) => new Set(prev).add(top.application_id));
+      setFront((prev) => prev.filter((c) => c.application_id !== top.application_id));
+      setStats((prev) => prev && { ...prev, remaining: Math.max(0, prev.remaining - 1) });
+      toast({ title: `Tracking ${top.job.company_name}`, description: "Moved to Applied. You'll get updates on Gmail and here whenever they reply.", tone: "success" });
+      refreshStatus();
+    } catch (err) {
+      toast({ title: "Could not mark as applied", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }, [top, busy, toast, refreshStatus]);
+
+  // Keyboard: ← skip, → keep, A I applied, Z / Backspace undo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -146,10 +168,11 @@ export default function SwipeReviewPage() {
       if (e.key === "ArrowRight") { e.preventDefault(); void swipe("keep"); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); void swipe("skip"); }
       else if (e.key === "z" || e.key === "Z" || e.key === "Backspace") { e.preventDefault(); void undo(); }
+      else if ((e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey) { e.preventDefault(); void iApplied(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [swipe, undo]);
+  }, [swipe, undo, iApplied]);
 
   const bulk = async (decision: Decision, minScore?: number) => {
     try {
@@ -261,8 +284,12 @@ export default function SwipeReviewPage() {
               <Check /> Keep
             </Button>
           </div>
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            Drag the card, or use <kbd className="border px-1.5 py-0.5 font-mono">←</kbd> skip · <kbd className="border px-1.5 py-0.5 font-mono">→</kbd> keep · <kbd className="border px-1.5 py-0.5 font-mono">Z</kbd> undo
+          <Button variant="ghost" size="sm" className="mt-3" onClick={iApplied} disabled={!top || busy}
+            title="Already applied to this one yourself? It moves to Applied and the agent tracks it (A)">
+            <CheckCheck /> I Applied to this myself
+          </Button>
+          <p className="mt-3 text-center text-xs text-muted-foreground">
+            Drag the card, or use <kbd className="border px-1.5 py-0.5 font-mono">←</kbd> skip · <kbd className="border px-1.5 py-0.5 font-mono">→</kbd> keep · <kbd className="border px-1.5 py-0.5 font-mono">A</kbd> I applied · <kbd className="border px-1.5 py-0.5 font-mono">Z</kbd> undo
           </p>
         </section>
 

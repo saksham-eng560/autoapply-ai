@@ -7,6 +7,7 @@ Examples:
     python scripts/test_scraper.py workday --source https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite -k Engineer
     python scripts/test_scraper.py linkedin -k "Backend Engineer" -l "San Francisco"
     python scripts/test_scraper.py generic --source https://company.com/careers
+    python scripts/test_scraper.py internshala -k "Software Engineer" -l "Delhi"
     python scripts/test_scraper.py url https://job-boards.greenhouse.io/stripe/jobs/123
 """
 
@@ -29,6 +30,8 @@ SOURCE_KEYS = {
     "ashby": "ashby_boards",
     "workday": "workday_sites",
     "generic": "career_pages",
+    "internshala": "internshala_urls",
+    "internships": "internship_lists",
 }
 
 

@@ -15,6 +15,7 @@ import httpx
 
 from app.automation.browser import USER_AGENTS
 from app.models.enums import ATSPlatform, ExperienceLevel, JobType
+from app.services.location_focus import LocationFocus, get_focus, location_tier
 from app.services.rate_limiter import rate_limiter
 from app.services.text_utils import html_to_text, normalize_text
 
@@ -38,17 +39,25 @@ class SearchQuery:
     posted_within_days: int = 14
     limit: int = 50
     sources: dict[str, Any] = field(default_factory=dict)
+    focus: LocationFocus | None = None  # e.g. India with Delhi NCR first (see services/location_focus.py)
 
     @classmethod
     def from_preferences(cls, prefs: dict[str, Any], limit: int = 50) -> SearchQuery:
+        focus = get_focus(prefs)
+        locations = [loc for loc in prefs.get("target_locations") or [] if loc]
+        if focus is not None and not locations:  # search the prime city and the whole country
+            prime = (prefs.get("location_focus") or {}).get("prime_cities") or []
+            country = str((prefs.get("location_focus") or {}).get("country") or "").strip()
+            locations = [f"{prime[0]}, {country}", country] if prime else [country]
         return cls(
             keywords=[k for k in prefs.get("target_roles") or [] if k],
-            locations=[loc for loc in prefs.get("target_locations") or [] if loc],
+            locations=locations,
             remote=(prefs.get("remote_preference") == "remote"),
             job_types=prefs.get("job_types") or [],
             posted_within_days=int(prefs.get("posted_within_days") or 14),
             limit=limit,
             sources=prefs.get("sources") or {},
+            focus=focus,
         )
 
     def matches_title(self, title: str) -> bool:
@@ -60,6 +69,9 @@ class SearchQuery:
         return any(_role_matches(normalize_text(k), norm) for k in self.keywords)
 
     def matches_location(self, location: str | None, remote: bool) -> bool:
+        if self.focus is not None:
+            # Everything is kept here; the scan keeps ~country_share % in the focus country afterwards.
+            return True
         if not self.locations:
             return True
         if remote:
@@ -278,4 +290,6 @@ class BaseScraper(ABC):
             if job.posted_date and job.posted_date < cutoff:
                 continue
             out.append(job)
+        if query.focus is not None:  # prime city, then the rest of the country, first in line for the limit
+            out.sort(key=lambda j: location_tier(j.location, j.is_remote, query.focus))
         return out[: query.limit]

@@ -30,7 +30,7 @@ from app.services.application_service import set_status
 from app.services.calendar_manager import generate_prep, upsert_calendar_event
 from app.services.email_parser import EmailMessage, analyze_email, email_intent_enum, is_job_related, meeting_platform
 from app.services.google_oauth import build_service, has_scope
-from app.services.notifier import notify
+from app.services.notifier import NOTIFICATION_SUBJECT_PREFIX, notify
 from app.services.text_utils import html_to_text
 
 logger = logging.getLogger(__name__)
@@ -251,6 +251,8 @@ def process_message(
     )
     if user.google_email and msg.sender_email == user.google_email.lower():
         return None
+    if msg.subject.startswith(NOTIFICATION_SUBJECT_PREFIX):  # our own notification e-mails (e.g. sent via SMTP)
+        return None
     if not is_job_related(msg, [a["company_name"] for a in applications]):
         return None
 
@@ -292,14 +294,19 @@ def process_message(
     db.flush()
 
     # Application status update (never moves backwards)
+    progress = ""
     if application is not None and analysis.get("status_update") not in (None, "", "none"):
         try:
             new_status = ApplicationStatus(analysis["status_update"])
         except ValueError:
             new_status = None
         if new_status and STATUS_RANK.get(application.status, 0) >= STATUS_RANK[ApplicationStatus.APPROVED] - 1:
+            before = application.status
             changed = set_status(db, application, new_status, changed_by="email_parser",
                                  notes=f"Detected '{intent}' e-mail: {msg.subject[:120]}", only_forward=True)
+            if changed:
+                progress = (f"\nApplication status: {before.value.replace('_', ' ')} → {new_status.value.replace('_', ' ')} "
+                            f"({application.job.role_title} @ {application.job.company_name})")
             if changed and new_status == ApplicationStatus.REJECTED:
                 application.rejection_reason = details.get("next_steps") or msg.subject[:250]
             if changed and new_status == ApplicationStatus.OFFER:
@@ -369,7 +376,7 @@ def process_message(
     notify(
         db, user, event,
         f"{'🎉 Offer from' if intent == 'offer' else 'Recruiter e-mail from'} {company}",
-        f"{intent.replace('_', ' ').title()}: {msg.subject}",
+        f"{intent.replace('_', ' ').title()}: {msg.subject}{progress}",
         link=f"/dashboard/emails?id={comm.id}",
         data={"communication_id": str(comm.id), "intent": intent},
     )
