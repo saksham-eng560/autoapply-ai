@@ -229,3 +229,38 @@ def tailor_resume(master: dict[str, Any], job: Job) -> dict[str, Any]:
     tailored, changes = heuristic_tailor(master, job)
     tailored, violations = enforce_truthfulness(master, tailored)
     return {"tailored_resume": tailored, "changes_made": changes, "violations": violations, "method": "heuristic"}
+
+
+def light_tailor(master: dict[str, Any], job: Job) -> dict[str, Any]:
+    """Minor, word-for-word-safe tweaks: nothing you wrote is reworded or removed, only reordered.
+
+    Bullets, projects and skills that match the job move to the top so a recruiter skimming the
+    first lines sees the relevant work; the summary, titles, dates and every sentence stay yours.
+    """
+    master = normalize_resume(master)
+    tailored = copy.deepcopy(master)
+    wanted = {canonical_skill(s) for s in job_skills(job)}
+    job_tokens = set(tokenize(job_text(job))) - STOPWORDS
+
+    def relevance(text: str) -> float:
+        skills = {canonical_skill(s) for s in extract_skills(text)}
+        return 3 * len(skills & wanted) + 0.2 * len(set(tokenize(text)) & job_tokens)
+
+    changes: list[str] = []
+    for exp in tailored["experience"]:
+        ordered = sorted(exp["bullets"], key=relevance, reverse=True)  # stable: ties keep your order
+        if ordered != exp["bullets"]:
+            exp["bullets"] = ordered
+            changes.append(f"Led {exp['company'] or exp['title']} with the bullets closest to the role")
+    projects = sorted(tailored["projects"], reverse=True,
+                      key=lambda p: relevance(" ".join([p["name"], p["description"], *p["technologies"]])))
+    if [p["name"] for p in projects] != [p["name"] for p in tailored["projects"]]:
+        tailored["projects"] = projects
+        changes.append(f"Moved '{projects[0]['name']}' to the top of Projects")
+    technical = tailored["skills"]["technical"]
+    ordered_skills = sorted(technical, key=lambda s: canonical_skill(s) not in wanted)
+    if ordered_skills != technical:
+        tailored["skills"]["technical"] = ordered_skills
+        matched = [s for s in ordered_skills if canonical_skill(s) in wanted][:5]
+        changes.append(f"Listed the skills this job asks for first ({', '.join(matched)})")
+    return {"tailored_resume": tailored, "changes_made": changes, "violations": [], "method": "light"}

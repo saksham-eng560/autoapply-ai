@@ -104,7 +104,9 @@ visas). Everything else — even a low score — goes to **Swipe Review**, best 
 heads-ups such as "not a remote role". (The original automatic mode, which skips jobs under a
 threshold and prepares the rest, is still available in Settings.)
 
-**Truthful tailoring.** Your master resume is rewritten for each job: the summary, bullet order,
+**Your resume, your way.** By default the agent sends **your original resume file, unchanged**.
+Switch to *light tweaks* (every word kept, relevant items moved to the top) or *full AI tailoring*
+in Settings › Mass apply. With full tailoring, your master resume is rewritten for each job: the summary, bullet order,
 emphasis and wording (for example, using the job's name for a skill you really have). A guard checks
 the result against your master resume and reverts anything that adds an employer, title, date,
 degree, skill or number that isn't in the original. You get an ATS-friendly PDF (classic or modern
@@ -179,6 +181,7 @@ Mass-apply settings (all in Settings › Mass apply):
 
 | Preference | Default | Meaning |
 |---|---|---|
+| `resume_strategy` | `original` | Which resume is sent. `original`: your uploaded file, byte for byte (your design and words). `light`: every word kept, only the most relevant bullets, projects and skills moved to the top per job. `full`: AI rewrite, guarded against invented facts. |
 | `review_mode` | `swipe` | `swipe`: nothing is skipped for a low score. `auto`: the original threshold mode. |
 | `auto_submit_kept` | on | Submit kept jobs as soon as the form is filled. Off: every kept job waits for approval. |
 | `trust_generated_answers` | on | The agent's answers to open questions ("Why this company?") don't hold a kept job back. Eligibility questions are never guessed either way. |

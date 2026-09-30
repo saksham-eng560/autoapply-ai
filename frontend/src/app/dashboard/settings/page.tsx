@@ -42,7 +42,7 @@ function MassApplyPanel() {
   const set = <K extends keyof Preferences>(k: K, v: Preferences[K]) => setPrefs({ ...prefs, [k]: v });
   const save = () => run(async () => {
     await put("/users/me/preferences", { preferences: {
-      review_mode: prefs.review_mode, auto_submit_kept: prefs.auto_submit_kept, trust_generated_answers: prefs.trust_generated_answers,
+      review_mode: prefs.review_mode, resume_strategy: prefs.resume_strategy, auto_submit_kept: prefs.auto_submit_kept, trust_generated_answers: prefs.trust_generated_answers,
       auto_keep_min_score: prefs.auto_keep_min_score, max_jobs_per_source: prefs.max_jobs_per_source,
       exclude_no_sponsorship: prefs.exclude_no_sponsorship, max_applications_per_day: prefs.max_applications_per_day,
       sources: { internship_lists: prefs.sources.internship_lists || [] },
@@ -89,6 +89,15 @@ function MassApplyPanel() {
               {(["swipe", "auto"] as const).map((m) => (
                 <button key={m} type="button" className={pill(prefs.review_mode === m)} aria-pressed={prefs.review_mode === m} onClick={() => set("review_mode", m)}>
                   {m === "swipe" ? "Swipe Review (recommended)" : "Automatic threshold"}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row label="Resume to send" hint="Your original file keeps your design and every word. Light tweaks keeps every word too and only moves the most relevant bullets, projects and skills to the top for each job (re-rendered in the app's clean template). Full AI tailoring rewrites wording, guarded against invented facts.">
+            <div className="flex flex-wrap gap-2">
+              {([["original", "Your original file"], ["light", "Light tweaks"], ["full", "Full AI tailoring"]] as const).map(([value, label]) => (
+                <button key={value} type="button" className={pill((prefs.resume_strategy || "original") === value)} onClick={() => set("resume_strategy", value)}>
+                  {label}
                 </button>
               ))}
             </div>

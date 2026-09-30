@@ -53,7 +53,7 @@ from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
 from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
 from app.services.rate_limiter import rate_limiter
-from app.services.resume_tailor import tailor_resume
+from app.services.resume_tailor import light_tailor, tailor_resume
 from app.services.text_utils import dedupe_key, extract_skills
 
 logger = logging.getLogger(__name__)
@@ -442,6 +442,22 @@ def _store(user_id: uuid.UUID, folder: str, data: bytes, ext: str, content_type:
     return get_storage().save(key, data, content_type)
 
 
+RESUME_STRATEGIES = ("original", "light", "full")
+
+
+def resume_strategy(user: User, master: Resume) -> str:
+    """original: send your uploaded file untouched · light: reorder only · full: AI rewrite (truth-guarded).
+
+    A resume pasted as text has no original file, so it falls back to light tweaks.
+    """
+    strategy = user.prefs.get("resume_strategy") or "original"
+    if strategy not in RESUME_STRATEGIES:
+        strategy = "original"
+    if strategy == "original" and not master.original_file_url:
+        return "light"
+    return strategy
+
+
 def render_tailored_pdf(user: User, resume: Resume) -> str:
     pdf = render_resume_pdf(resume.parsed_content, template=(user.prefs.get("resume_template") or "classic"))
     key = _store(user.id, "resumes", pdf, "pdf", "application/pdf")
@@ -474,24 +490,32 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
             app.match_score, app.match_reasoning, app.match_details = (
                 evaluation["match_score"], evaluation["reasoning"], evaluation)
 
-        checkpoint(db)  # never hold the write lock while waiting on the LLM
-        tailored = tailor_resume(master.parsed_content, job)
-        resume = Resume(
-            user_id=user.id,
-            label=f"{job.company_name} — {job.role_title}"[:255],
-            parsed_content=tailored["tailored_resume"],
-            is_master=False,
-            parent_resume_id=master.id,
-            tailored_for_job_id=job.id,
-            changes_made=tailored["changes_made"] + [f"[guard] {v}" for v in tailored["violations"]],
-            version=1,
-        )
-        db.add(resume)
-        db.flush()
-        app.tailored_resume_id = resume.id
-        app.tailored_resume_pdf_url = render_tailored_pdf(user, resume)
-        run.log(f"Tailored resume ({tailored['method']}), {len(tailored['changes_made'])} changes, "
-                f"{len(tailored['violations'])} truthfulness corrections")
+        strategy = resume_strategy(user, master)
+        if strategy == "original":
+            # Your own file, exactly as uploaded: your design, your words, nothing re-parsed or re-rendered.
+            resume = master
+            app.tailored_resume_id = None
+            app.tailored_resume_pdf_url = master.original_file_url
+            run.log("Using your original resume file, unchanged")
+        else:
+            checkpoint(db)  # never hold the write lock while waiting on the LLM
+            tailored = (light_tailor if strategy == "light" else tailor_resume)(master.parsed_content, job)
+            resume = Resume(
+                user_id=user.id,
+                label=f"{job.company_name} — {job.role_title}"[:255],
+                parsed_content=tailored["tailored_resume"],
+                is_master=False,
+                parent_resume_id=master.id,
+                tailored_for_job_id=job.id,
+                changes_made=tailored["changes_made"] + [f"[guard] {v}" for v in tailored["violations"]],
+                version=1,
+            )
+            db.add(resume)
+            db.flush()
+            app.tailored_resume_id = resume.id
+            app.tailored_resume_pdf_url = render_tailored_pdf(user, resume)
+            run.log(f"Tailored resume ({tailored['method']}), {len(tailored['changes_made'])} changes, "
+                    f"{len(tailored['violations'])} truthfulness corrections")
 
         checkpoint(db)
         if _undone(db, app, run):
@@ -679,9 +703,9 @@ def build_packet(db: Session, user: User, app: Application, resume_path: str | N
     )
 
 
-def _resume_filename(user: User) -> str:
+def _resume_filename(user: User, ext: str = ".pdf") -> str:
     safe = "".join(c for c in (user.full_name or "Resume") if c.isalnum() or c in " -_").strip().replace(" ", "_")
-    return f"{safe or 'Resume'}_Resume.pdf"
+    return f"{safe or 'Resume'}_Resume{ext}"
 
 
 def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> Any:
@@ -695,9 +719,10 @@ def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> A
             raise ValueError("No resume available")
         app.tailored_resume_pdf_url = render_tailored_pdf(user, resume)
     pdf = storage.read(app.tailored_resume_pdf_url)
+    ext = os.path.splitext(app.tailored_resume_pdf_url)[1].lower() or ".pdf"  # your original may be a .docx
     cover_pdf = render_cover_letter_pdf(app.cover_letter, {"name": user.full_name, "email": user.email}) if app.cover_letter else None
     submitter = get_submitter(app.ats_platform or application_platform(app.job))
-    with _temp_file(pdf, ".pdf", _resume_filename(user)) as resume_path:
+    with _temp_file(pdf, ext, _resume_filename(user, ext)) as resume_path:
         if cover_pdf:
             with _temp_file(cover_pdf, ".pdf", "Cover_Letter.pdf") as cover_path:
                 packet = build_packet(db, user, app, resume_path, cover_path)

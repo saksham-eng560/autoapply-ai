@@ -64,6 +64,8 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
         raise HTTPException(422, "max_applications_per_day must be 1-200")
     if prefs.get("review_mode") not in ("swipe", "auto"):
         raise HTTPException(422, "review_mode must be 'swipe' or 'auto'")
+    if prefs.get("resume_strategy") not in ("original", "light", "full"):
+        raise HTTPException(422, "resume_strategy must be 'original', 'light' or 'full'")
     auto_keep = prefs.get("auto_keep_min_score")
     if auto_keep is not None and (not isinstance(auto_keep, int) or not 0 <= auto_keep <= 100):
         raise HTTPException(422, "auto_keep_min_score must be empty or 0-100")
