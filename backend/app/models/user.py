@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONType, UTCDateTime, utcnow
@@ -119,6 +119,11 @@ class User(Base):
     linkedin_cookie_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     linkedin_session_valid: Mapped[bool] = mapped_column(Boolean, default=False)
     linkedin_profile_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+
+    # Internshala login (cookies synced by the browser extension), encrypted JSON list of cookies
+    internshala_session: Mapped[list[dict[str, Any]] | None] = mapped_column(EncryptedJSON)
+    internshala_session_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    internshala_session_valid: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Per-ATS login credentials (e.g. Workday tenant accounts), encrypted JSON
     ats_credentials: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)
