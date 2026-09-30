@@ -1,4 +1,10 @@
-# AutoApply AI
+<p align="center">
+  <img src="frontend/public/icon.svg" width="84" alt="AutoApply AI logo" />
+</p>
+
+<h1 align="center">AutoApply AI</h1>
+
+<p align="center"><b>Swipe right. We apply. Internships on autopilot.</b></p>
 
 An autonomous job-application agent that you run yourself, built for mass-applying to internships
 and startup roles. It scans thousands of openings, puts every one that passes your filters into a
@@ -70,8 +76,14 @@ your browser and streams the logs. **Ctrl-C stops everything.**
 | `./start.sh --reset` | Wipes the local database first. |
 | `start.bat` | Windows: the Docker path (`start.bat stop` to stop). Or use WSL and `./start.sh`. |
 
-Then: create your account → upload your resume → **Settings › Mass apply › Internships** → save your
-visa and work-authorization answers in **Settings › Saved answers** → **Scan** → swipe.
+Your first ten minutes:
+
+1. **Create your account** at http://localhost:3000/register.
+2. **Upload your resume** in Resume Lab (PDF, DOCX or pasted text) and check the parsed result.
+3. **Settings › Mass apply › Internships**: one click adds the internship lists and startup boards.
+4. **Settings › Saved answers**: save work authorization and visa sponsorship. Without them, kept jobs
+   stop in Needs approval instead of being submitted.
+5. **Scan for jobs now**, then open **Swipe Review** and start swiping.
 
 Add `ANTHROPIC_API_KEY=...` to `.env` for much better scoring, tailoring and answers (everything also
 works without it on built-in heuristics). `make start` does the same as `./start.sh`.
@@ -123,10 +135,18 @@ its status. Messages are filed under `AutoApply AI/…` Gmail labels, and reply 
 covering the company, likely questions, STAR stories drawn from your resume, and questions to ask.
 Reminders go out before each interview.
 
-**Dashboard.** Next.js dashboard with an overview, applications pipeline, job browser, e-mail feed,
-interviews, analytics (response, interview and offer rates, time to response, platform effectiveness,
-keywords that get callbacks), a resume editor, agent logs, and settings. Live updates arrive over
-WebSocket. It has light and dark themes, can be installed as a PWA, and sends browser notifications.
+**Dashboard.** Next.js dashboard with a landing page, an overview, **Swipe Review**, an applications
+pipeline, a job browser, an e-mail feed, interviews, analytics (response, interview and offer rates,
+time to response, platform effectiveness, keywords that get callbacks), a resume editor, agent logs,
+and settings. Live updates arrive over WebSocket. It works on phones, can be installed as a PWA, and
+sends browser notifications.
+
+**Design.** An editorial "ink" theme (charcoal, warm cream type and one signal red) with a "paper"
+light theme: Dela Gothic One display type, Space Grotesk for the interface, hairline grid lines,
+square controls and outlined pill tags. It's built from [shadcn/ui](https://ui.shadcn.com) (Radix)
+components restyled through the design tokens in `frontend/src/app/globals.css`, with framer-motion
+for the swipe deck. The logo, favicon, PWA and extension icons all use the same bracket-and-red-block
+mark (`frontend/public/icon.svg`).
 
 **Notifications.** In-app, e-mail (SMTP or your own Gmail), Discord and Slack. You choose which
 events go to which channel, and there's a weekly summary.
