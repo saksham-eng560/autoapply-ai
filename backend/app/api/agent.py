@@ -49,8 +49,13 @@ def agent_status(user: CurrentUser, db: DB) -> dict:
     prefs = user.prefs
     interval = int(prefs.get("scan_interval_hours") or 6)
     next_scan = (user.last_scan_at + timedelta(hours=interval)).isoformat() if user.last_scan_at and prefs.get("scan_enabled", True) else None
+    to_review = db.scalar(select(func.count()).select_from(Application).where(
+        Application.user_id == user.id, Application.status.in_([ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED]),
+        Application.review_decision.is_(None))) or 0
     return {
         "has_master_resume": get_master_resume(db, user) is not None,
+        "to_review": to_review,
+        "review_mode": prefs.get("review_mode") or "swipe",
         "pending_approval": counts.get(ApplicationStatus.PENDING_APPROVAL, 0),
         "preparing": counts.get(ApplicationStatus.PREPARING, 0),
         "approved": counts.get(ApplicationStatus.APPROVED, 0),

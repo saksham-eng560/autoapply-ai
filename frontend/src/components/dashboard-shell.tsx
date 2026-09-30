@@ -5,11 +5,18 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSWRConfig } from "swr";
 import {
-  BarChart3, Briefcase, CalendarDays, FileText, Inbox, LayoutDashboard, LogOut, Menu, ScrollText, Send, Settings, X,
+  BarChart3, Briefcase, CalendarDays, FileText, Inbox, Layers, LayoutDashboard, LogOut, Menu, ScrollText, Send,
+  Settings, type LucideIcon,
 } from "lucide-react";
+import { Logo } from "@/components/brand";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useAgentStatus, useMe } from "@/hooks/use-applications";
@@ -17,17 +24,44 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { post } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
-const NAV = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/dashboard/applications", label: "Applications", icon: Send, badge: "pending" as const },
-  { href: "/dashboard/jobs", label: "Jobs", icon: Briefcase },
-  { href: "/dashboard/emails", label: "Emails", icon: Inbox },
-  { href: "/dashboard/interviews", label: "Interviews", icon: CalendarDays },
-  { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/dashboard/resume", label: "Resume Lab", icon: FileText },
-  { href: "/dashboard/logs", label: "Agent Logs", icon: ScrollText },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+type NavItem = { href: string; label: string; icon: LucideIcon; badge?: "review" | "pending" };
+
+const NAV: { section: string; items: NavItem[] }[] = [
+  {
+    section: "Agent",
+    items: [
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+      { href: "/dashboard/review", label: "Swipe Review", icon: Layers, badge: "review" },
+      { href: "/dashboard/applications", label: "Applications", icon: Send, badge: "pending" },
+      { href: "/dashboard/jobs", label: "All jobs", icon: Briefcase },
+    ],
+  },
+  {
+    section: "Inbox",
+    items: [
+      { href: "/dashboard/emails", label: "Emails", icon: Inbox },
+      { href: "/dashboard/interviews", label: "Interviews", icon: CalendarDays },
+    ],
+  },
+  {
+    section: "Insights",
+    items: [
+      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/dashboard/logs", label: "Agent logs", icon: ScrollText },
+    ],
+  },
+  {
+    section: "Setup",
+    items: [
+      { href: "/dashboard/resume", label: "Resume Lab", icon: FileText },
+      { href: "/dashboard/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
+
+function initials(name: string | undefined) {
+  return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
+}
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -52,7 +86,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       mutate((key) => typeof key === "string" && (key.startsWith("/notifications") || key.startsWith("/agent")));
     }
     if (event.type === "application_updated" || event.type === "agent_run_updated") {
-      mutate((key) => typeof key === "string" && (key.startsWith("/applications") || key.startsWith("/agent") || key.startsWith("/analytics") || key.startsWith("/jobs")));
+      mutate((key) => typeof key === "string" && ["/applications", "/agent", "/analytics", "/jobs", "/review"].some((p) => key.startsWith(p)));
     }
   });
 
@@ -61,65 +95,115 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   };
 
+  const current = NAV.flatMap((s) => s.items).find((i) => (i.href === "/dashboard" ? pathname === i.href : pathname.startsWith(i.href)));
+
+  const badgeFor = (badge?: NavItem["badge"]) => {
+    if (badge === "review") return status?.to_review || 0;
+    if (badge === "pending") return status?.pending_approval || 0;
+    return 0;
+  };
+
   const nav = (
-    <nav className="flex flex-1 flex-col gap-1 p-3">
-      {NAV.map(({ href, label, icon: Icon, badge }) => {
-        const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href);
-        return (
-          <Link key={href} href={href} onClick={() => setMobileOpen(false)}
-            className={cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
-              active ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
-            <Icon className="h-4 w-4" />
-            <span className="flex-1">{label}</span>
-            {badge === "pending" && !!status?.pending_approval && (
-              <span className="rounded-full bg-warning px-1.5 text-[11px] font-semibold text-warning-foreground">{status.pending_approval}</span>
-            )}
-          </Link>
-        );
-      })}
+    <nav className="flex flex-1 flex-col gap-6 overflow-y-auto py-6 scrollbar-thin" aria-label="Dashboard">
+      {NAV.map(({ section, items }) => (
+        <div key={section}>
+          <p className="label-caps mb-2 px-6 text-[10px] text-muted-foreground">{section}</p>
+          {items.map(({ href, label, icon: Icon, badge }) => {
+            const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+            const count = badgeFor(badge);
+            return (
+              <Link key={href} href={href} onClick={() => setMobileOpen(false)} aria-current={active ? "page" : undefined}
+                className={cn("group flex h-11 items-center gap-3 px-6 text-[12px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                  active ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-accent hover:text-foreground")}>
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="flex-1 truncate">{label}</span>
+                {count > 0 && (
+                  <span className={cn("min-w-6 rounded-full border px-1.5 text-center text-[10px] leading-5 tabular-nums",
+                    active ? "border-primary-foreground/70" : badge === "review" ? "border-primary bg-primary text-primary-foreground" : "border-warning text-warning")}>
+                    {count > 999 ? "999+" : count}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 
+  const footer = (
+    <div className="border-t border-line/60 px-6 py-4 text-xs text-muted-foreground">
+      <div className="flex items-center justify-between">
+        <span className="label-caps text-[10px]">Applied today</span>
+        <span className="tabular-nums text-foreground">{status?.applied_today ?? 0} / {status?.daily_limit ?? "—"}</span>
+      </div>
+      <div className="mt-2 h-1 bg-foreground/10">
+        <div className="h-full bg-primary transition-all"
+          style={{ width: `${Math.min(100, ((status?.applied_today ?? 0) / Math.max(1, status?.daily_limit ?? 1)) * 100)}%` }} />
+      </div>
+      <p className="mt-3 flex items-center gap-2">
+        <span className={cn("h-2 w-2 rounded-full", live ? "animate-pulse-dot bg-success" : "bg-muted-foreground/50")} />
+        {live ? "Live updates on" : "Polling for updates"}
+      </p>
+    </div>
+  );
+
   return (
-    <div className="flex min-h-screen">
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-card lg:flex">
-        <Link href="/dashboard" className="flex h-16 items-center gap-2 border-b px-5 font-semibold">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground"><FileText className="h-4 w-4" /></div>
-          AutoApply AI
-        </Link>
+    <div className="noise flex min-h-screen bg-background">
+      <aside className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-line/60 lg:flex">
+        <div className="flex h-16 items-center border-b border-line/60 px-6"><Logo href="/dashboard" /></div>
         {nav}
-        <div className="border-t p-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2 px-2">
-            <span className={cn("h-2 w-2 rounded-full", live ? "bg-success" : "bg-muted-foreground/40")} />
-            {live ? "Live updates on" : "Polling for updates"}
-          </div>
-        </div>
+        {footer}
       </aside>
-      {mobileOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-64 flex-col bg-card shadow-xl">
-            <div className="flex h-16 items-center justify-between border-b px-4 font-semibold">
-              AutoApply AI
-              <Button variant="ghost" size="icon" onClick={() => setMobileOpen(false)}><X /></Button>
-            </div>
-            {nav}
-          </aside>
-        </div>
-      )}
+
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="left" className="flex w-[272px] flex-col gap-0 border-line/60 p-0">
+          <SheetTitle className="flex h-16 items-center border-b border-line/60 px-6"><Logo href="/dashboard" /></SheetTitle>
+          <SheetDescription className="sr-only">Dashboard navigation</SheetDescription>
+          {nav}
+          {footer}
+        </SheetContent>
+      </Sheet>
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur lg:px-8">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-2 border-b border-line/60 bg-background/90 px-4 backdrop-blur lg:px-8">
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu /></Button>
+          <p className="label-caps hidden text-muted-foreground sm:block">
+            <span className="text-primary">/</span> {current?.label || "Dashboard"}
+          </p>
           <div className="flex-1" />
+          {!!status?.to_review && !pathname.startsWith("/dashboard/review") && (
+            <Link href="/dashboard/review"
+              className="label-caps mr-2 hidden items-center gap-2 border border-primary px-3 py-1.5 text-[11px] text-primary transition-colors hover:bg-primary hover:text-primary-foreground md:inline-flex">
+              <Layers className="h-3.5 w-3.5" /> {status.to_review} to swipe
+            </Link>
+          )}
           <NotificationBell />
           <ThemeToggle />
-          <div className="hidden text-right text-sm sm:block">
-            {isLoading ? <Skeleton className="h-4 w-28" /> : <p className="font-medium leading-tight">{me?.full_name}</p>}
-            <p className="text-xs text-muted-foreground">{me?.email}</p>
-          </div>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Sign out"><LogOut /></Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger className="ml-1 flex items-center gap-3 px-1 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Account menu">
+              <div className="hidden text-right text-sm sm:block">
+                {isLoading ? <Skeleton className="h-4 w-28" /> : <p className="font-medium leading-tight">{me?.full_name}</p>}
+                <p className="text-xs text-muted-foreground">{me?.email}</p>
+              </div>
+              <Avatar className="h-9 w-9 rounded-none border border-line">
+                <AvatarFallback className="rounded-none bg-primary text-xs font-bold text-primary-foreground">{initials(me?.full_name)}</AvatarFallback>
+              </Avatar>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="font-normal">
+                <p className="font-medium">{me?.full_name}</p>
+                <p className="text-xs text-muted-foreground">{me?.email}</p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => router.push("/dashboard/settings")}><Settings /> Settings</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => router.push("/dashboard/resume")}><FileText /> Resume Lab</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={logout} className="text-primary focus:text-primary"><LogOut /> Sign out</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
-        <main className="flex-1 p-4 lg:p-8">{children}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-10">{children}</main>
       </div>
     </div>
   );

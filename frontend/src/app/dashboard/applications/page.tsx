@@ -11,13 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApplications } from "@/hooks/use-applications";
-import { STATUS_LABELS, cn } from "@/lib/utils";
-import type { ApplicationStatus } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const FILTERS: { key: string; label: string; statuses?: string }[] = [
   { key: "all", label: "All active" },
   { key: "pending_approval", label: "Needs approval", statuses: "pending_approval" },
-  { key: "in_progress", label: "In progress", statuses: "matched,preparing,approved" },
+  { key: "in_progress", label: "In progress", statuses: "preparing,approved" },
   { key: "applied", label: "Applied", statuses: "applied,acknowledged" },
   { key: "interviewing", label: "Interviewing", statuses: "screening,interview,assessment,final_round" },
   { key: "offers", label: "Offers", statuses: "offer,accepted" },
@@ -43,7 +42,8 @@ function ApplicationsInner() {
       <div className="mb-4 flex flex-wrap gap-2">
         {FILTERS.map((f) => (
           <button key={f.key} onClick={() => { setFilter(f.key); setPage(1); router.replace(`/dashboard/applications${f.key === "all" ? "" : `?status=${f.key}`}`); }}
-            className={cn("rounded-full border px-3 py-1 text-sm transition-colors", filter === f.key ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>
+            aria-pressed={filter === f.key}
+            className={cn("rounded-full border px-3 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background", filter === f.key ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>
             {f.label}
             {count(f.statuses) ? <span className="ml-1.5 opacity-80">{count(f.statuses)}</span> : null}
           </button>
@@ -52,9 +52,9 @@ function ApplicationsInner() {
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Search company or role…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          <Input className="pl-9" placeholder="Search company or role…" aria-label="Search applications" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         </div>
-        <Select className="sm:w-48" value={sort} onChange={(e) => setSort(e.target.value)}>
+        <Select className="sm:w-48" aria-label="Sort applications" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="updated">Recently updated</option>
           <option value="match">Best match</option>
           <option value="created">Newest</option>
@@ -62,7 +62,7 @@ function ApplicationsInner() {
         </Select>
       </div>
       <div className="space-y-3">
-        {isLoading && Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[76px] rounded-xl" />)}
+        {isLoading && Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[76px]" />)}
         {!isLoading && !data?.items.length && (
           <EmptyState icon={Send} title="No applications here" description="Run a scan from the Overview page, or add a job by URL on the Jobs page." />
         )}
@@ -77,7 +77,6 @@ function ApplicationsInner() {
           </div>
         </div>
       )}
-      <p className="sr-only">{Object.keys(STATUS_LABELS as Record<ApplicationStatus, string>).length} statuses</p>
     </div>
   );
 }

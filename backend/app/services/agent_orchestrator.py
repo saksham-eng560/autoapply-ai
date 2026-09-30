@@ -12,6 +12,11 @@ Behavioural rules implemented here (PLAN.md §8):
  9. Salary questions use the bottom of the user's range (question_answerer).
 10. A failed form is retried once before alerting the user.
 And DIRECTIVE 2: nothing is ever submitted without explicit user approval.
+
+Swipe Review (``review_mode="swipe"``, the default): scans never skip a job for a low score.
+Every job that passes your hard filters waits in Swipe Review; keeping one is your approval to
+prepare it and, with ``auto_submit_kept``, to submit it once the form is filled with every required
+answer. Anything the agent is unsure about still stops in "Needs approval".
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.database import checkpoint
 from app.core.storage import get_storage, user_prefix
 from app.models.agent_run import AgentRun
 from app.models.application import Application
@@ -42,7 +48,7 @@ from app.scrapers import SCRAPERS, ScrapedJob, ScraperError, SearchQuery, detect
 from app.services.application_service import set_status
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
-from app.services.job_matcher import evaluate_match, job_text, prefilter, priority_key
+from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
 from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
@@ -216,13 +222,18 @@ def ensure_application(db: Session, user: User, job: Job) -> tuple[Application, 
     return app, True
 
 
+def is_swipe_mode(prefs: dict[str, Any]) -> bool:
+    return (prefs.get("review_mode") or "swipe") == "swipe"
+
+
 def evaluate_application(
     db: Session, user: User, app: Application, master: Resume | None, use_llm: bool = True, resume_vec: list[float] | None = None
 ) -> Application:
     job = app.job
     prefs = user.prefs
+    swipe = is_swipe_mode(prefs)
     threshold = int(prefs.get("auto_apply_threshold") or 80)
-    keep, reason = prefilter(job, prefs)
+    keep, reason = prefilter(job, prefs, strict=not swipe)
     if not keep:
         app.match_score = 0
         app.match_reasoning = reason
@@ -232,20 +243,32 @@ def evaluate_application(
         app.match_reasoning = "Already applied to the same role at this company"
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", app.match_reasoning)
         return app
+    heads_up = filter_reasons(job, prefs)[1] if swipe else []
     if master is None:
         app.match_reasoning = "Upload a master resume to enable matching"
+        if heads_up:
+            app.match_details = {"heads_up": heads_up}
         return app
     if resume_vec is not None and job.description_embedding:
         app.similarity_score = round(cosine_similarity(resume_vec, job.description_embedding), 4)
     evaluation = evaluate_match(master.parsed_content, job, prefs, threshold, use_llm=use_llm)
     app.match_score = evaluation["match_score"]
     app.match_reasoning = evaluation["reasoning"]
-    app.match_details = evaluation
-    if evaluation["proceed_with_application"] and evaluation["match_score"] >= threshold:
+    app.match_details = {**evaluation, "heads_up": heads_up}
+    if swipe:
+        # Never skipped for a low score: you decide in Swipe Review.
+        set_status(db, app, ApplicationStatus.MATCHED, "agent", f"Match score {app.match_score} — waiting for your swipe")
+    elif evaluation["proceed_with_application"] and evaluation["match_score"] >= threshold:
         set_status(db, app, ApplicationStatus.MATCHED, "agent", f"Match score {app.match_score}")
     else:
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", f"Match score {app.match_score} below {threshold}")
     return app
+
+
+def _swiped(db: Session, app: Application) -> bool:
+    """Re-read the decision: you may have swiped this card while the scan was still working."""
+    db.refresh(app, attribute_names=["status", "review_decision"])
+    return app.review_decision is not None
 
 
 def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str] | None = None,
@@ -254,9 +277,10 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
     prefs = user.prefs
     try:
         master = get_master_resume(db, user)
-        query = SearchQuery.from_preferences(prefs, limit=settings.MAX_JOBS_PER_SOURCE)
+        query = SearchQuery.from_preferences(prefs, limit=int(prefs.get("max_jobs_per_source") or settings.MAX_JOBS_PER_SOURCE))
         chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
         run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
+        checkpoint(db)
         scraped = discover_jobs(query, chosen, run)
         new_apps: list[Application] = []
         jobs: list[Job] = []
@@ -273,7 +297,9 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
                 new_apps.append(app)
         run.run.jobs_discovered = len(new_apps)
         run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
+        checkpoint(db)  # embedding may call an API
         embed_jobs(db, jobs)
+        checkpoint(db)
 
         resume_vec = resume_embedding(db, master) if master else None
         if master is None:
@@ -282,16 +308,38 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         if resume_vec is not None:
             new_apps.sort(key=lambda a: cosine_similarity(resume_vec, a.job.description_embedding), reverse=True)
         for idx, app in enumerate(new_apps):
+            use_llm = idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN
+            if use_llm or idx % 10 == 0:
+                checkpoint(db)  # cards reach Swipe Review as they're scored; no write lock held during an LLM call
+            if _swiped(db, app):
+                continue  # you kept / skipped it before the scan got to it
             try:
-                evaluate_application(db, user, app, master, use_llm=idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN,
-                                     resume_vec=resume_vec)
+                evaluate_application(db, user, app, master, use_llm=use_llm, resume_vec=resume_vec)
             except Exception as exc:  # noqa: BLE001
                 run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
         matched = [a for a in new_apps if a.status == ApplicationStatus.MATCHED]
         run.run.jobs_matched = len(matched)
-        run.log(f"{len(matched)} jobs matched your threshold ({prefs.get('auto_apply_threshold')})")
         user.last_scan_at = datetime.now(UTC)
 
+        if is_swipe_mode(prefs):
+            auto_keep = prefs.get("auto_keep_min_score")
+            kept = 0
+            if auto_keep is not None and master is not None:
+                for app in sorted(matched, key=lambda a: priority_key(a.match_score, a.job.deadline_date)):
+                    if (app.match_score or 0) >= int(auto_keep) and not _swiped(db, app):
+                        keep_application(db, user, app, decided_by="agent",
+                                         note=f"Kept automatically (score {app.match_score} ≥ {auto_keep})")
+                        kept += 1
+            waiting = len(matched) - kept
+            run.log(f"{waiting} jobs are waiting for you in Swipe Review"
+                    + (f"; {kept} kept automatically (score ≥ {auto_keep})" if kept else ""))
+            run.finish("completed")
+            notify(db, user, "scan_completed", "Job scan finished",
+                   f"{run.run.jobs_discovered} new jobs — {waiting} waiting for your swipe.", link="/dashboard/review",
+                   data={"run_id": str(run.run.id)})
+            return run.run
+
+        run.log(f"{len(matched)} jobs matched your threshold ({prefs.get('auto_apply_threshold')})")
         if auto_prepare and master is not None:
             queued = queue_preparations(db, user, matched, run)
             run.log(f"Queued {queued} applications for preparation")
@@ -332,6 +380,48 @@ def queue_preparations(db: Session, user: User, matched: list[Application], run:
     return count
 
 
+# --------------------------------------------------------------------------- swipe review
+REVIEWABLE = (ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED, ApplicationStatus.SKIPPED)
+
+
+def keep_application(db: Session, user: User, app: Application, decided_by: str = "user",
+                     note: str = "Kept in Swipe Review") -> Application:
+    """Swipe right: prepare this job (tailor, cover letter, fill) and, with auto_submit_kept, submit it."""
+    from app.worker.dispatch import enqueue
+
+    if app.status not in REVIEWABLE:
+        raise ValueError(f"This job is already {app.status.value.replace('_', ' ')}")
+    app.review_decision = "keep"
+    app.reviewed_at = datetime.now(UTC)
+    app.auto_submit = bool(user.prefs.get("auto_submit_kept", True))
+    set_status(db, app, ApplicationStatus.PREPARING, decided_by, note)
+    enqueue("prepare_application", str(app.id), after_commit=db)
+    return app
+
+
+def skip_application(db: Session, app: Application, note: str = "Skipped in Swipe Review") -> Application:
+    if app.status not in REVIEWABLE:
+        raise ValueError(f"This job is already {app.status.value.replace('_', ' ')}")
+    app.review_decision = "skip"
+    app.reviewed_at = datetime.now(UTC)
+    set_status(db, app, ApplicationStatus.SKIPPED, "user", note)
+    return app
+
+
+def undo_review(db: Session, app: Application) -> Application:
+    """Put a swiped job back on the deck (only while nothing has been prepared yet)."""
+    if app.review_decision is None:
+        raise ValueError("This job has not been swiped")
+    if app.review_decision == "skip" and app.status != ApplicationStatus.SKIPPED:
+        raise ValueError(f"This job is already {app.status.value.replace('_', ' ')}")
+    if app.review_decision == "keep" and (app.status != ApplicationStatus.PREPARING or app.tailored_resume_id):
+        raise ValueError("Preparation has already started — withdraw it from Applications instead")
+    app.review_decision = None
+    app.auto_submit = False
+    set_status(db, app, ApplicationStatus.MATCHED, "user", "Swipe undone")
+    return app
+
+
 def import_job_url(db: Session, user: User, url: str) -> Application:
     scraped = fetch_job_from_url(url)
     if scraped is None:
@@ -364,21 +454,27 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
     if app is None:
         raise ValueError("Application not found")
     user = db.get(User, app.user_id)
+    if app.status != ApplicationStatus.PREPARING:
+        # Stale task: the swipe was undone, the job was skipped, or a duplicate task already prepared it.
+        logger.info("Skipping preparation of %s: status is %s", app.id, app.status.value)
+        return app
     run = RunLog(db, user, "prepare", "system")
     run.log(f"Preparing {app.job.role_title} @ {app.job.company_name}")
     try:
         master = get_master_resume(db, user)
         if master is None:
             raise ValueError("No master resume uploaded")
-        if app.status not in (ApplicationStatus.PREPARING,):
-            set_status(db, app, ApplicationStatus.PREPARING, "agent", "Preparing application")
         job = app.job
+        checkpoint(db)
+        if enrich_job(db, job):
+            run.log("Fetched the full job description from the posting")
         if app.match_score is None:  # e.g. imported before a resume existed; score it for the reviewer
             evaluation = evaluate_match(master.parsed_content, job, user.prefs,
                                         int(user.prefs.get("auto_apply_threshold") or 80), use_llm=True)
             app.match_score, app.match_reasoning, app.match_details = (
                 evaluation["match_score"], evaluation["reasoning"], evaluation)
 
+        checkpoint(db)  # never hold the write lock while waiting on the LLM
         tailored = tailor_resume(master.parsed_content, job)
         resume = Resume(
             user_id=user.id,
@@ -397,6 +493,9 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         run.log(f"Tailored resume ({tailored['method']}), {len(tailored['changes_made'])} changes, "
                 f"{len(tailored['violations'])} truthfulness corrections")
 
+        checkpoint(db)
+        if _undone(db, app, run):
+            return app
         if user.prefs.get("cover_letter_enabled", True):
             letter = generate_cover_letter(resume.parsed_content, job)
             app.cover_letter = letter["cover_letter"]
@@ -419,11 +518,14 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
                 run.log(f"Could not pre-fetch Greenhouse questions: {exc}", level="warning")
 
         run.run.applications_prepared = 1
+        checkpoint(db)
+        if _undone(db, app, run):
+            return app
         should_stage = settings.AUTO_STAGE_APPLICATIONS if stage is None else stage
         if should_stage:
             stage_application(db, str(app.id), run=run)
         else:
-            _mark_ready(db, user, app)
+            _ready_or_submit(db, user, app, run)
         run.finish("completed")
     except Exception as exc:
         logger.exception("Preparation failed for %s", application_id)
@@ -434,6 +536,78 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         notify(db, user, "agent_error", f"Could not prepare {app.job.company_name} application", str(exc)[:300],
                link=f"/dashboard/applications/{app.id}")
     return app
+
+
+def _undone(db: Session, app: Application, run: RunLog) -> bool:
+    """True (and the run is closed) when you undid or skipped the job while it was being prepared."""
+    db.refresh(app, attribute_names=["status", "review_decision"])
+    if app.status == ApplicationStatus.PREPARING:
+        return False
+    run.log(f"Preparation stopped: the job is now {app.status.value.replace('_', ' ')}")
+    run.finish("cancelled")
+    return True
+
+
+def enrich_job(db: Session, job: Job) -> bool:
+    """Postings from curated lists carry only a title; fetch the real description when we can."""
+    if not (job.raw_data or {}).get("listing_source") or len(job.description or "") >= 400:
+        return False
+    try:
+        scraped = fetch_job_from_url(job.application_url or job.source_url)
+    except Exception as exc:  # noqa: BLE001 - best effort, the application still works without it
+        logger.info("Could not enrich job %s: %s", job.id, exc)
+        return False
+    if scraped is None or len(scraped.description or "") <= len(job.description or ""):
+        return False
+    job.description = scraped.description
+    job.requirements = job.requirements or scraped.requirements
+    if scraped.salary_min or scraped.salary_max:
+        job.salary_min, job.salary_max = scraped.salary_min, scraped.salary_max
+        job.salary_currency = scraped.salary_currency or job.salary_currency
+    job.extracted_skills = extract_skills(f"{job.role_title}\n{job.description}")
+    job.description_embedding = None
+    embed_jobs(db, [job])
+    return True
+
+
+def unanswered_questions(app: Application, trust_generated: bool = False) -> list[str]:
+    """Questions that must be answered by you before a submission.
+
+    Blank required answers and every eligibility question the agent is unsure about (visa, work
+    authorization, record checks...) always block. With ``trust_generated`` the agent's own answers
+    to open-ended questions ("Why do you want to work here?") don't.
+    """
+    from app.services.question_answerer import FACTUAL
+    from app.services.text_utils import normalize_text
+
+    blocking = []
+    for a in app.custom_answers or []:
+        question = str(a.get("question") or "")
+        answer = str(a.get("answer") or "").strip()
+        factual = bool(FACTUAL.search(normalize_text(question)))
+        if (a.get("required") and not answer) or (factual and (not answer or a.get("needs_user_review"))):
+            blocking.append(question)
+        elif a.get("needs_user_review") and not trust_generated:
+            blocking.append(question)
+    return blocking
+
+
+def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | None = None) -> None:
+    """Kept jobs go straight to submission when nothing needs a human; everything else waits for review."""
+    from app.worker.dispatch import enqueue
+
+    if app.auto_submit and app.review_decision == "keep":
+        blockers = unanswered_questions(app, trust_generated=bool(user.prefs.get("trust_generated_answers", True)))
+        if not app.needs_manual_review and not blockers:
+            set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved when you kept it in Swipe Review")
+            if run:
+                run.log("Everything answered — submitting (you kept this job in Swipe Review)")
+            enqueue("submit_application", str(app.id), after_commit=db)
+            return
+        if run:
+            run.log("Needs your review before submitting: "
+                    + (app.manual_review_reason or f"{len(blockers)} question(s) need an answer"))
+    _mark_ready(db, user, app)
 
 
 def _mark_ready(db: Session, user: User, app: Application) -> None:
@@ -546,6 +720,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     app = db.get(Application, uuid.UUID(str(application_id)))
     user = db.get(User, app.user_id)
     result = None
+    checkpoint(db)
     for attempt in (1, 2):  # rule #10: retry once
         result = _run_submitter(db, user, app, submit=False)
         if result.success or result.session_expired:
@@ -573,7 +748,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
         run.log(f"Staged form on {app.ats_platform.value if app.ats_platform else 'unknown'}: "
                 f"{len([f for f in result.fields if f['status'] == 'filled'])} fields filled"
                 + (f", review needed: {app.manual_review_reason}" if app.needs_manual_review else ""))
-    _mark_ready(db, user, app)
+    _ready_or_submit(db, user, app, run)
     return app
 
 
@@ -628,6 +803,7 @@ def submit_application(db: Session, application_id: str) -> Application:
 
     run = RunLog(db, user, "apply", "user")
     run.log(f"Submitting {app.job.role_title} @ {app.job.company_name} via {platform}")
+    checkpoint(db)
     result = _run_submitter(db, user, app, submit=True)
     if result.screenshot:
         key = _store(user.id, "screenshots", result.screenshot, "png", "image/png")

@@ -4,11 +4,13 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function TagInput({ value, onChange, placeholder, className }: {
+export function TagInput({ value, onChange, placeholder, className, id, "aria-label": ariaLabel }: {
   value: string[];
   onChange: (value: string[]) => void;
   placeholder?: string;
   className?: string;
+  id?: string;
+  "aria-label"?: string;
 }) {
   const [draft, setDraft] = useState("");
   const add = (raw: string) => {
@@ -17,9 +19,9 @@ export function TagInput({ value, onChange, placeholder, className }: {
     setDraft("");
   };
   return (
-    <div className={cn("flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm focus-within:ring-1 focus-within:ring-ring", className)}>
+    <div className={cn("flex min-h-10 w-full flex-wrap items-center gap-1.5 border border-input bg-transparent px-2 py-1.5 text-sm transition-colors hover:border-foreground/50 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary", className)}>
       {value.map((tag) => (
-        <span key={tag} className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-0.5 text-xs">
+        <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-foreground/40 px-2.5 py-0.5 text-xs">
           {tag}
           <button type="button" onClick={() => onChange(value.filter((t) => t !== tag))} aria-label={`Remove ${tag}`}>
             <X className="h-3 w-3 text-muted-foreground hover:text-foreground" />
@@ -27,6 +29,8 @@ export function TagInput({ value, onChange, placeholder, className }: {
         </span>
       ))}
       <input
+        id={id}
+        aria-label={ariaLabel}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {

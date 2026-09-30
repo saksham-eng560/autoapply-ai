@@ -109,7 +109,8 @@ class Base(DeclarativeBase):
 # --------------------------------------------------------------------------- engine
 def _build_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
-        kwargs: dict[str, Any] = {"connect_args": {"check_same_thread": False}}
+        # Background tasks and API requests share the file: wait for the writer instead of failing fast.
+        kwargs: dict[str, Any] = {"connect_args": {"check_same_thread": False, "timeout": 30}}
         if url in ("sqlite://", "sqlite:///:memory:"):
             kwargs["poolclass"] = StaticPool
         eng = create_engine(url, **kwargs)
@@ -118,6 +119,9 @@ def _build_engine(url: str) -> Engine:
         def _sqlite_pragmas(dbapi_conn: Any, _: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            if url not in ("sqlite://", "sqlite:///:memory:"):
+                cursor.execute("PRAGMA journal_mode=WAL")  # readers never block on the writer
+                cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.close()
 
         return eng
@@ -153,6 +157,16 @@ def get_db() -> Iterator[Session]:
         raise
     finally:
         db.close()
+
+
+def checkpoint(db: Session) -> None:
+    """Commit progress before a long network / browser step so the write lock isn't held throughout.
+
+    With SQLite (local mode) one open write transaction blocks every other writer, e.g. your swipes
+    while a scan runs. With PostgreSQL it simply makes progress visible to the dashboard sooner.
+    """
+    if db.in_transaction():
+        db.commit()
 
 
 @contextmanager
@@ -193,3 +207,25 @@ def create_all() -> None:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == "sqlite":
+        _add_missing_sqlite_columns()
+
+
+def _add_missing_sqlite_columns() -> None:
+    """Local SQLite databases have no Alembic history: add columns introduced by newer versions."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column.type.compile(dialect=engine.dialect)}'
+                if column.server_default is not None:
+                    default = column.server_default.arg
+                    default_sql = default.compile(dialect=engine.dialect) if hasattr(default, "compile") else f"'{default}'"
+                    ddl += f" NOT NULL DEFAULT {default_sql}" if not column.nullable else f" DEFAULT {default_sql}"
+                conn.execute(text(ddl))
+                logger.info("Added column %s.%s", table.name, column.name)

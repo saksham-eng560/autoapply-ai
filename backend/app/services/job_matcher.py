@@ -79,38 +79,70 @@ def job_skills(job: Job) -> list[str]:
 
 
 # --------------------------------------------------------------------------- pre-filter
-def prefilter(job: Job, prefs: dict[str, Any]) -> tuple[bool, str | None]:
-    """Cheap preference checks applied before any scoring. Returns (keep, reason_if_rejected)."""
+NO_SPONSORSHIP_PATTERNS = re.compile(
+    r"does not offer sponsorship|no (visa )?sponsorship|u\.?s\.? citizenship( is)? required|"
+    r"must be a u\.?s\.? citizen|unable to sponsor|not able to sponsor|will not sponsor", re.IGNORECASE)
+
+
+def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Split preference checks into (hard, soft) reasons.
+
+    Hard reasons are rules you set explicitly (companies to avoid, excluded keywords, job types,
+    expired deadlines, sponsorship): a job that breaks one is never worth your time. Soft reasons
+    (title, remote, age of the posting) are only heads-ups in Swipe Review mode.
+    """
+    hard: list[str] = []
+    soft: list[str] = []
     company = normalize_company(job.company_name)
     for avoided in prefs.get("companies_to_avoid") or []:
         if avoided and normalize_company(avoided) and normalize_company(avoided) in company:
-            return False, f"{job.company_name} is in your companies-to-avoid list"
+            hard.append(f"{job.company_name} is in your companies-to-avoid list")
+            break
 
     text = normalize_text(f"{job.role_title} {job.description[:3000]}")
     for kw in prefs.get("keywords_exclude") or []:
         if kw and re.search(rf"\b{re.escape(normalize_text(kw))}\b", normalize_text(job.role_title)):
-            return False, f"Title contains excluded keyword '{kw}'"
+            hard.append(f"Title contains excluded keyword '{kw}'")
+            break
 
     job_types = [t for t in (prefs.get("job_types") or []) if t]
     if job_types and job.job_type is not None and job.job_type.value not in job_types:
-        return False, f"Job type {job.job_type.value} not in preferences"
+        hard.append(f"Job type {job.job_type.value} not in preferences")
+
+    if job.deadline_date and job.deadline_date < datetime.now(UTC).date():
+        hard.append("Application deadline has passed")
+
+    if prefs.get("exclude_no_sponsorship"):
+        sponsorship = str((job.raw_data or {}).get("sponsorship") or "")
+        if NO_SPONSORSHIP_PATTERNS.search(f"{sponsorship} {job.description[:6000]}"):
+            hard.append("The posting says it does not sponsor visas")
 
     remote_pref = prefs.get("remote_preference") or "any"
     if remote_pref == "remote" and not job.is_remote and "remote" not in text:
-        return False, "Not a remote role"
+        soft.append("Not a remote role")
 
     posted_within = prefs.get("posted_within_days")
     if posted_within and job.posted_date and job.posted_date < (datetime.now(UTC).date() - timedelta(days=int(posted_within))):
-        return False, f"Posted more than {posted_within} days ago"
-
-    if job.deadline_date and job.deadline_date < datetime.now(UTC).date():
-        return False, "Application deadline has passed"
+        soft.append(f"Posted more than {posted_within} days ago")
 
     targets = [normalize_text(t) for t in (prefs.get("target_roles") or []) if t]
     if targets:
         title = normalize_text(job.role_title)
         if not any(_role_matches(t, title) for t in targets):
-            return False, "Title does not match your target roles"
+            soft.append("Title does not match your target roles")
+    return hard, soft
+
+
+def prefilter(job: Job, prefs: dict[str, Any], strict: bool = True) -> tuple[bool, str | None]:
+    """Cheap preference checks applied before any scoring. Returns (keep, reason_if_rejected).
+
+    ``strict=False`` (Swipe Review) only rejects on hard reasons; soft ones are left to you.
+    """
+    hard, soft = filter_reasons(job, prefs)
+    if hard:
+        return False, hard[0]
+    if strict and soft:
+        return False, soft[0]
     return True, None
 
 

@@ -37,7 +37,7 @@ function LineLegend() {
 function TimelineTooltip({ active, payload, label }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border bg-background px-3 py-2 text-xs shadow-md">
+    <div className="border border-line bg-popover px-3 py-2 text-xs shadow-xl">
       <p className="mb-1 text-muted-foreground">{shortDate(String(label))}</p>
       {SERIES.map((s) => {
         const item = payload.find((p) => p.dataKey === s.key);
@@ -62,7 +62,7 @@ export function TimelineChart({ data, height = 260 }: { data: Overview["timeline
         <Button variant="ghost" size="sm" onClick={() => setTable((t) => !t)}>{table ? "Show chart" : "Show table"}</Button>
       </div>
       {table ? (
-        <div className="max-h-[260px] overflow-y-auto rounded-md border">
+        <div className="max-h-[260px] overflow-y-auto border">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
               <tr><th className="px-3 py-1.5 text-left font-medium">Date</th>{SERIES.map((s) => <th key={s.key} className="px-3 py-1.5 text-right font-medium">{s.label}</th>)}</tr>
@@ -99,7 +99,7 @@ export function TimelineChart({ data, height = 260 }: { data: Overview["timeline
 function CountTooltip({ active, payload, label }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border bg-background px-3 py-2 text-xs shadow-md">
+    <div className="border border-line bg-popover px-3 py-2 text-xs shadow-xl">
       <span className="font-semibold tabular-nums text-foreground">{payload[0].value}</span>{" "}
       <span className="text-muted-foreground">jobs scored {label}</span>
     </div>
@@ -115,7 +115,7 @@ export function MatchHistogram({ data, height = 220 }: { data: Overview["match_d
         <XAxis dataKey="range" {...AXIS} interval={0} fontSize={11} />
         <YAxis allowDecimals={false} {...AXIS} axisLine={false} width={48} />
         <Tooltip content={<CountTooltip />} cursor={{ fill: "hsl(var(--muted))" }} />
-        <Bar dataKey="count" fill="var(--series-1)" maxBarSize={24} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" fill="var(--series-1)" maxBarSize={24} radius={[0, 0, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -137,7 +137,7 @@ export function StatusBreakdown({ byStatus }: { byStatus: Record<string, number>
         <li key={r.status} className="grid grid-cols-[8rem_1fr] items-center gap-3 text-sm" title={`${STATUS_LABELS[r.status]}: ${r.count}`}>
           <span className="truncate text-muted-foreground">{STATUS_LABELS[r.status]}</span>
           <div className="flex items-center gap-2">
-            <div className="h-3 rounded-r-[4px]" style={{ width: `${(r.count / max) * 85}%`, minWidth: 4, background: "var(--series-1)" }} />
+            <div className="h-3" style={{ width: `${(r.count / max) * 85}%`, minWidth: 4, background: "var(--series-1)" }} />
             <span className="tabular-nums text-xs font-medium">{r.count}</span>
           </div>
         </li>
@@ -154,13 +154,13 @@ export function StatTile({ label, value, hint, className, icon }: {
   icon?: React.ReactNode;
 }) {
   return (
-    <div className={cn("rounded-xl border bg-card p-4 shadow-sm", className)}>
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>{label}</span>
+    <div className={cn("flex flex-col border bg-card p-5", className)}>
+      <div className="flex items-center justify-between gap-2 text-muted-foreground">
+        <span className="label-caps text-[10px]">{label}</span>
         {icon}
       </div>
-      <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+      <p className="mt-4 font-display text-4xl leading-none tabular-nums">{value}</p>
+      {hint && <p className="mt-3 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

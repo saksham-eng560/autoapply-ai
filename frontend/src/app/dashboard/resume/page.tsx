@@ -10,7 +10,7 @@ import { ResumeEditor } from "@/components/resume-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog } from "@/components/ui/dialog";
+import { Modal } from "@/components/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -116,10 +116,10 @@ export default function ResumePage() {
               <Button variant="outline" onClick={() => setPasteOpen(true)}>Paste text</Button>
             </div>
           } />
-        <Dialog open={pasteOpen} onOpenChange={setPasteOpen} title="Paste your resume" className="max-w-2xl"
+        <Modal open={pasteOpen} onOpenChange={setPasteOpen} title="Paste your resume" className="max-w-2xl"
           footer={<Button onClick={importText} loading={uploading} disabled={pasteText.length < 50}>Import</Button>}>
           <Textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} className="min-h-[360px]" placeholder="Paste the full text of your resume…" />
-        </Dialog>
+        </Modal>
       </div>
     );
   }
@@ -153,7 +153,7 @@ export default function ResumePage() {
         </Card>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-2">{content && <ResumeEditor value={content} onChange={(v) => { setContent(v); setDirty(true); }} />}</div>
         <div className="space-y-6">
           <Card>
@@ -162,7 +162,7 @@ export default function ResumePage() {
               <CardDescription>Saved version, ATS-friendly single column</CardDescription>
             </CardHeader>
             <CardContent>
-              <iframe key={`${master.version}-${template}`} src={`/api/v1/resumes/${master.id}/pdf?template=${template}`} title="Resume preview" className="h-[520px] w-full rounded-lg border" />
+              <iframe key={`${master.version}-${template}`} src={`/api/v1/resumes/${master.id}/pdf?template=${template}`} title="Resume preview" className="h-[520px] w-full border" />
             </CardContent>
           </Card>
           <Card>
@@ -187,7 +187,7 @@ export default function ResumePage() {
             <CardContent className="max-h-80 space-y-2 overflow-y-auto">
               {tailored?.items.map((r) => (
                 <a key={r.id} href={r.pdf_url || `/api/v1/resumes/${r.id}/pdf`} target="_blank" rel="noreferrer"
-                  className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                  className="flex items-center justify-between px-2 py-1.5 text-sm hover:bg-accent">
                   <span className="truncate">{r.label}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">{formatDate(r.created_at)}</span>
                 </a>

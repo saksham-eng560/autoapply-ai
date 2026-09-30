@@ -41,3 +41,4 @@ extension/dist/
 # Runtime state
 dump.rdb
 celerybeat-schedule*
+logs/
