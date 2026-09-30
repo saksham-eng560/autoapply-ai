@@ -78,6 +78,9 @@ Python, TypeScript, SQL, FastAPI, PostgreSQL, Docker, Kubernetes, AWS, Git, Reac
 def _reset_state() -> Iterator[None]:
     Base.metadata.drop_all(bind=engine)
     create_all()
+    # PostgreSQL: pooled connections keep prepared plans for the dropped enum types ("cached plan must
+    # not change result type"), so start every test with fresh connections.
+    engine.dispose()
     rate_limiter._mem.clear()
     set_llm(LLMClient(providers=[]))  # heuristic mode unless a test injects a fake provider
     yield

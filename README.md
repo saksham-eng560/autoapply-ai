@@ -428,7 +428,7 @@ Both workflows skip themselves until their variables are set.
 ## Testing and CI
 
 ```bash
-make test           # 74 backend tests on SQLite, incl. a real-Chromium end-to-end test
+make test           # 90 backend tests on SQLite, incl. real-Chromium end-to-end tests (swipe → submit)
 make test-pg        # the same suite on PostgreSQL + pgvector (TEST_DATABASE_URL)
 make e2e            # only the browser end-to-end test
 make lint           # ruff (backend + scripts), ESLint + TypeScript (dashboard)

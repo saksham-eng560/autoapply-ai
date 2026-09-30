@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import httpx
 import respx
 from fastapi.testclient import TestClient
@@ -182,3 +184,193 @@ def test_sqlite_upgrade_adds_new_columns() -> None:
     create_all()
     columns = {c["name"] for c in inspect(engine).get_columns("applications")}
     assert {"auto_submit", "review_decision", "reviewed_at"} <= columns
+
+
+# ------------------------------------------------------------------ races & stale tasks
+def _capture_enqueue(monkeypatch) -> list[tuple]:  # type: ignore[no-untyped-def]
+    queued: list[tuple] = []
+    monkeypatch.setattr("app.worker.dispatch.enqueue", lambda *a, **k: queued.append(a))
+    return queued
+
+
+def _prepare(app_id: str) -> None:
+    from app.core.database import session_scope
+    from app.services import agent_orchestrator as orch
+
+    with session_scope() as db:
+        orch.prepare_application(db, app_id, stage=False)
+
+
+def test_undo_skip_only_while_skipped(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    _capture_enqueue(monkeypatch)
+    app_id = _seed_queue(auth_client.get("/api/v1/auth/me").json()["email"], 1)[0]
+    assert auth_client.post(f"/api/v1/review/{app_id}", json={"decision": "skip"}).status_code == 200
+    # ...then applied to by hand from the Jobs / Applications pages: undo must not pull it back to the deck
+    assert auth_client.post(f"/api/v1/applications/{app_id}/mark-applied").status_code == 200
+    assert auth_client.post(f"/api/v1/review/{app_id}/undo").status_code == 409
+    assert auth_client.get(f"/api/v1/applications/{app_id}").json()["status"] == "applied"
+
+
+def test_stale_prepare_tasks_never_submit_twice(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    queued = _capture_enqueue(monkeypatch)
+    first, second = _seed_queue(auth_client.get("/api/v1/auth/me").json()["email"], 2)
+    # keep -> undo -> keep before the worker picks anything up: two prepare tasks for one job
+    assert auth_client.post(f"/api/v1/review/{first}", json={"decision": "keep"}).status_code == 200
+    assert auth_client.post(f"/api/v1/review/{first}/undo").status_code == 200
+    assert auth_client.post(f"/api/v1/review/{first}", json={"decision": "keep"}).status_code == 200
+    # kept, then skipped from Applications before its task ran
+    assert auth_client.post(f"/api/v1/review/{second}", json={"decision": "keep"}).status_code == 200
+    assert auth_client.post(f"/api/v1/applications/{second}/skip").status_code == 200
+
+    tasks = [a[1] for a in queued if a[0] == "prepare_application"]
+    assert tasks == [first, first, second]
+    for app_id in tasks:
+        _prepare(app_id)
+    assert [a for a in queued if a[0] == "submit_application"] == [("submit_application", first)]
+    assert auth_client.get(f"/api/v1/applications/{second}").json()["status"] == "skipped"
+
+
+def test_undo_during_preparation_is_respected(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    from app.services import agent_orchestrator as orch
+
+    queued = _capture_enqueue(monkeypatch)
+    app_id = _seed_queue(auth_client.get("/api/v1/auth/me").json()["email"], 1)[0]
+    assert auth_client.post(f"/api/v1/review/{app_id}", json={"decision": "keep"}).status_code == 200
+    real_tailor = orch.tailor_resume
+
+    def tailor_then_undo(*args, **kwargs):  # type: ignore[no-untyped-def]
+        result = real_tailor(*args, **kwargs)
+        assert auth_client.post(f"/api/v1/review/{app_id}/undo").status_code == 200  # swiped back mid-way
+        return result
+
+    monkeypatch.setattr("app.services.agent_orchestrator.tailor_resume", tailor_then_undo)
+    _prepare(app_id)
+    assert [a for a in queued if a[0] == "submit_application"] == []
+    detail = auth_client.get(f"/api/v1/applications/{app_id}").json()
+    assert detail["status"] == "matched"
+    assert [c["application_id"] for c in auth_client.get("/api/v1/review/queue").json()["items"]] == [app_id]
+
+
+class _FakeBoard:
+    """Three internship postings, offline."""
+
+    def search(self, query: SearchQuery) -> list:
+        from app.scrapers.base import ScrapedJob
+
+        return [ScrapedJob(company_name=f"Board {i}", role_title="Software Engineer Intern", location="Austin, TX",
+                           description="Build Python and FastAPI services with PostgreSQL and Docker. " * 3,
+                           source_url=f"https://board.example/jobs/{i}", source_platform=ATSPlatform.GREENHOUSE).finalize()
+                for i in range(3)]
+
+
+def _scan(email: str) -> None:
+    from app.core.database import session_scope
+    from app.services import agent_orchestrator as orch
+
+    with session_scope() as db:
+        user = db.query(User).filter(User.email == email).one()
+        orch.run_scan(db, user, platforms=["fakeboard"])
+
+
+def _app_for_job(job_id) -> Application:  # type: ignore[no-untyped-def]
+    with SessionLocal() as db:
+        return db.query(Application).filter(Application.job_id == job_id).one()
+
+
+def test_scan_respects_swipes_made_while_it_runs(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    """The scan commits as it goes, so you can swipe cards before it is done with them."""
+    from app.services import agent_orchestrator as orch
+
+    queued = _capture_enqueue(monkeypatch)
+    monkeypatch.setitem(SCRAPERS, "fakeboard", _FakeBoard)
+    assert auth_client.put("/api/v1/users/me/preferences", json={"preferences": {
+        "target_roles": ["Software Engineer"], "auto_keep_min_score": 0}}).status_code == 200
+    real_evaluate = orch.evaluate_match
+    evaluated: list = []
+
+    def evaluate_and_swipe(resume, job, *args, **kwargs):  # type: ignore[no-untyped-def]
+        evaluated.append(job.id)
+        if len(evaluated) == 1:  # skip a card the scan hasn't scored yet
+            with SessionLocal() as db:
+                other = db.query(Application).filter(Application.job_id != job.id).first()
+            assert auth_client.post(f"/api/v1/review/{other.id}", json={"decision": "skip"}).status_code == 200
+        if len(evaluated) == 2:  # skip the card it has just scored, before auto-keep runs
+            assert auth_client.post(f"/api/v1/review/{_app_for_job(evaluated[0]).id}",
+                                    json={"decision": "skip"}).status_code == 200
+        return real_evaluate(resume, job, *args, **kwargs)
+
+    monkeypatch.setattr("app.services.agent_orchestrator.evaluate_match", evaluate_and_swipe)
+    _scan(auth_client.get("/api/v1/auth/me").json()["email"])
+
+    assert len(evaluated) == 2  # the card skipped mid-scan is not scored (and un-skipped) afterwards
+    with SessionLocal() as db:
+        apps = db.query(Application).all()
+        decisions = sorted((a.status.value, a.review_decision) for a in apps)
+    assert decisions == [("preparing", "keep"), ("skipped", "skip"), ("skipped", "skip")]
+    assert [a[0] for a in queued] == ["prepare_application"]
+
+
+def test_no_write_lock_held_through_llm_calls(auth_client: TestClient, master_resume: dict, monkeypatch) -> None:
+    """SQLite (local mode): scans and preparations never hold the write lock while waiting on an LLM,
+    so swipes and other writes don't fail with "database is locked" meanwhile."""
+    import sqlite3
+
+    import pytest
+
+    from app.core.database import engine
+    from app.scrapers.base import ScrapedJob
+    from app.services import agent_orchestrator as orch
+
+    if engine.dialect.name != "sqlite":
+        pytest.skip("SQLite only")
+
+    def can_write() -> bool:
+        conn = sqlite3.connect(engine.url.database, timeout=0.05)
+        try:
+            conn.execute("UPDATE users SET full_name = full_name")
+            conn.commit()
+            return True
+        except sqlite3.OperationalError:
+            return False
+        finally:
+            conn.close()
+
+    probes: list[tuple[str, bool]] = []
+
+    def probing(name, fn):  # type: ignore[no-untyped-def]
+        def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
+            if kwargs.get("use_llm", True):
+                probes.append((name, can_write()))
+            return fn(*args, **kwargs)
+        return wrapper
+
+    queued = _capture_enqueue(monkeypatch)
+    monkeypatch.setitem(SCRAPERS, "fakeboard", _FakeBoard)
+    for name in ("evaluate_match", "tailor_resume", "generate_cover_letter"):
+        monkeypatch.setattr(f"app.services.agent_orchestrator.{name}", probing(name, getattr(orch, name)))
+    monkeypatch.setattr("app.services.agent_orchestrator.fetch_job_from_url", lambda url: ScrapedJob(
+        company_name="Board 0", role_title="Software Engineer Intern", description="Full description. " * 60,
+        source_url=url, source_platform=ATSPlatform.GREENHOUSE))
+    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"target_roles": ["Software Engineer"]}})
+    _scan(auth_client.get("/api/v1/auth/me").json()["email"])
+    assert [p for p in probes if p[0] == "evaluate_match"] == [("evaluate_match", True)] * 3
+
+    app_id = auth_client.get("/api/v1/review/queue").json()["items"][0]["application_id"]
+    with SessionLocal() as db:  # a curated-list posting: preparation first fetches the full description
+        db.get(Application, uuid.UUID(app_id)).job.raw_data = {"listing_source": "simplify-internships"}
+        db.commit()
+    assert auth_client.post(f"/api/v1/review/{app_id}", json={"decision": "keep"}).status_code == 200
+    probes.clear()
+    _prepare(app_id)
+    assert probes == [("tailor_resume", True), ("generate_cover_letter", True)]
+    assert queued[-1] == ("submit_application", app_id)
+
+
+def test_env_inline_comments_are_not_values(tmp_path) -> None:
+    """`PROXY_URLS=   # comment` used to become a bogus proxy and break every browser session."""
+    from app.config import Settings
+
+    env = tmp_path / ".env"
+    env.write_text("PROXY_URLS=    # comma-separated http://user:pass@host:port (A, B)\nGMAIL_PUBSUB_TOPIC=  # x\n")
+    s = Settings(_env_file=str(env))
+    assert s.proxy_urls == [] and s.GMAIL_PUBSUB_TOPIC is None

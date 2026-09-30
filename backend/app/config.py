@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -128,6 +128,14 @@ class Settings(BaseSettings):
 
     # ---- Paths ----
     PROMPTS_DIR: str = Field(default_factory=lambda: str(REPO_ROOT / "prompts"))
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _drop_inline_comments(cls, value: object, info: ValidationInfo) -> object:
+        # `KEY=   # comment` in a .env file arrives as the comment text itself: use the default instead.
+        if isinstance(value, str) and value.strip().startswith("#"):
+            return cls.model_fields[info.field_name].get_default(call_default_factory=True)
+        return value
 
     # ---------------------------------------------------------------- helpers
     @property

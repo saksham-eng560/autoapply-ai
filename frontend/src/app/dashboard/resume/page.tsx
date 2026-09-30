@@ -153,7 +153,7 @@ export default function ResumePage() {
         </Card>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-2">{content && <ResumeEditor value={content} onChange={(v) => { setContent(v); setDirty(true); }} />}</div>
         <div className="space-y-6">
           <Card>

@@ -12,9 +12,10 @@ export type Decision = "keep" | "skip";
 export type SwipeCardHandle = { fling: (decision: Decision) => Promise<void> };
 
 const THRESHOLD = 120;
-const CRITERIA: [keyof ReviewCard["scores"], string][] = [
-  ["skills_match", "Skills"], ["experience_match", "Experience"], ["industry_match", "Domain"],
-  ["location_match", "Location"], ["compensation_match", "Pay"],
+// [score key, label, short label for narrow cards]
+const CRITERIA: [keyof ReviewCard["scores"], string, string][] = [
+  ["skills_match", "Skills", "Skills"], ["experience_match", "Experience", "Exp."], ["industry_match", "Domain", "Domain"],
+  ["location_match", "Location", "Place"], ["compensation_match", "Pay", "Pay"],
 ];
 
 function sponsorshipTone(value: string | null): "success" | "danger" | "muted" {
@@ -115,12 +116,14 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
 
         {Object.keys(card.scores).length > 0 && (
           <div className="grid grid-cols-5 gap-2">
-            {CRITERIA.map(([key, label]) => {
+            {CRITERIA.map(([key, label, short]) => {
               const v = card.scores[key] ?? 0;
               return (
                 <div key={key} title={`${label}: ${v}/20`}>
                   <div className="h-1 bg-foreground/10"><div className="h-full bg-primary" style={{ width: `${(v / 20) * 100}%` }} /></div>
-                  <p className="mt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+                  <p className="mt-1.5 truncate text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="sm:hidden" aria-hidden>{short}</span><span className="sr-only sm:not-sr-only">{label}</span>
+                  </p>
                 </div>
               );
             })}

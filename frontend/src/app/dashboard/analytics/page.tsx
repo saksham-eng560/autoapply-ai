@@ -25,15 +25,15 @@ export default function AnalyticsPage() {
       {/* Date range first, one row above everything it scopes */}
       <div className="mb-6 flex flex-wrap gap-2">
         {RANGES.map((r) => (
-          <button key={r.label} onClick={() => setRange(r.days)}
-            className={cn("rounded-full border px-3 py-1 text-sm", range === r.days ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>
+          <button key={r.label} onClick={() => setRange(r.days)} aria-pressed={range === r.days}
+            className={cn("rounded-full border px-3 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background", range === r.days ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>
             {r.label}
           </button>
         ))}
       </div>
       {isLoading && !data ? <Skeleton className="h-96" /> : data && (
         <div className={cn("space-y-6", isLoading && "opacity-60")}>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-4 sm:grid-cols-2 sm:[&>:last-child]:col-span-2 xl:grid-cols-5 xl:[&>:last-child]:col-span-1">
             <StatTile label="Applications sent" value={data.totals.applied} hint={`${data.totals.total} tracked in total`} />
             <StatTile label="Response rate" value={`${data.rates.response_rate}%`} hint={`${data.totals.responses} responses`} />
             <StatTile label="Interview rate" value={`${data.rates.interview_rate}%`} hint={`${data.totals.interviews} reached interviews`} />
@@ -49,7 +49,7 @@ export default function AnalyticsPage() {
             <CardContent><TimelineChart data={data.timeline} height={300} /></CardContent>
           </Card>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Match score distribution</CardTitle>
@@ -66,7 +66,7 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Platform effectiveness</CardTitle>

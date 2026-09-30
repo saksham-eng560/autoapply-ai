@@ -52,7 +52,7 @@ function Onboarding() {
         <span className="font-display text-3xl tabular-nums text-primary">{Math.round((completed / steps.length) * 100)}%</span>
       </CardHeader>
       <div className="px-5"><Progress value={(completed / steps.length) * 100} /></div>
-      <CardContent className="mt-4 grid gap-px bg-border p-0 sm:grid-cols-2 lg:grid-cols-5">
+      <CardContent className="mt-4 grid gap-px bg-border p-0 sm:grid-cols-2 sm:[&>:last-child]:col-span-2 xl:grid-cols-5 xl:[&>:last-child]:col-span-1">
         {steps.map((s, i) => (
           <Link key={s.label} href={s.href} className="group flex items-start gap-3 bg-card p-4 text-sm transition-colors hover:bg-accent">
             {s.done ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
@@ -71,7 +71,7 @@ function SwipeBand({ count, onScan, scanning, disabled }: { count: number; onSca
     <div className="relative mb-8 grid overflow-hidden border md:grid-cols-[1fr_auto]">
       <TunnelGrid className="absolute inset-0 opacity-25" animated={false} />
       <div className={cn("relative p-6 sm:p-8", count > 0 && "bg-primary text-primary-foreground")}>
-        <p className="label-caps text-[11px] opacity-80">Swipe Review</p>
+        <p className="label-caps text-[11px]">Swipe Review</p>
         <p className="display mt-3 text-3xl sm:text-5xl">
           {count > 0 ? <>{count} {count === 1 ? "job is" : "jobs are"}<br />waiting for you</> : <>Deck is empty.<br />Go find more.</>}
         </p>
@@ -125,7 +125,7 @@ export default function OverviewPage() {
       <Onboarding />
       {status && <SwipeBand count={status.to_review} onScan={startScan} scanning={scanning || !!running} disabled={!status.has_master_resume} />}
 
-      <div className="grid border sm:grid-cols-2 xl:grid-cols-5 grid-lines">
+      <div className="grid border sm:grid-cols-2 sm:[&>:last-child]:col-span-2 xl:grid-cols-5 xl:[&>:last-child]:col-span-1 grid-lines">
         {isLoading || !totals ? (
           Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[132px]" />)
         ) : (

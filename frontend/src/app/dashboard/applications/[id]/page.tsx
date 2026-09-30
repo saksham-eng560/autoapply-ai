@@ -98,7 +98,7 @@ export default function ApplicationDetailPage() {
           <JobMatchBadge score={app.match_score} size="lg" />
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-bold tracking-tight">{job?.role_title}</h1>
+              <h1 className="display text-2xl sm:text-[1.9rem]">{job?.role_title}</h1>
               <StatusBadge status={app.status} />
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -126,7 +126,7 @@ export default function ApplicationDetailPage() {
             </>
           )}
           {!reviewable && !["approved", "preparing"].includes(app.status) && (
-            <Select className="w-44" value="" onChange={(e) => e.target.value && run("status", () => post(`/applications/${app.id}/status`, { status: e.target.value }), "Status updated")}>
+            <Select className="w-44" aria-label="Update status" value="" onChange={(e) => e.target.value && run("status", () => post(`/applications/${app.id}/status`, { status: e.target.value }), "Status updated")}>
               <option value="">Update status…</option>
               {MANUAL_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
             </Select>
@@ -170,7 +170,7 @@ export default function ApplicationDetailPage() {
       )}
 
       <Tabs defaultValue="review">
-        <TabsList className="flex-wrap">
+        <TabsList className="h-auto w-full flex-wrap">
           <TabsTrigger value="review">Filled form</TabsTrigger>
           <TabsTrigger value="resume">Tailored resume</TabsTrigger>
           <TabsTrigger value="cover">Cover letter</TabsTrigger>
@@ -183,7 +183,7 @@ export default function ApplicationDetailPage() {
         </TabsList>
 
         <TabsContent value="review">
-          <div className="grid gap-6 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
             <Card className="xl:col-span-3">
               <CardHeader>
                 <CardTitle>Form screenshot</CardTitle>
@@ -232,7 +232,7 @@ export default function ApplicationDetailPage() {
         </TabsContent>
 
         <TabsContent value="resume">
-          <div className="grid gap-6 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <Card className="xl:col-span-2">
               <CardHeader className="flex-row items-center justify-between space-y-0">
                 <div>
@@ -305,12 +305,12 @@ export default function ApplicationDetailPage() {
                     </div>
                   </div>
                   {a.options && a.options.length ? (
-                    <Select value={a.answer} onChange={(e) => updateAnswer(i, e.target.value)} disabled={!reviewable}>
+                    <Select aria-label={a.question} value={a.answer} onChange={(e) => updateAnswer(i, e.target.value)} disabled={!reviewable}>
                       {!a.options.includes(a.answer) && <option value={a.answer}>{a.answer || "Select…"}</option>}
                       {a.options.map((o) => <option key={o} value={o}>{o}</option>)}
                     </Select>
                   ) : (
-                    <Textarea value={a.answer} onChange={(e) => updateAnswer(i, e.target.value)} disabled={!reviewable}
+                    <Textarea aria-label={a.question} value={a.answer} onChange={(e) => updateAnswer(i, e.target.value)} disabled={!reviewable}
                       className={cn(a.answer.length < 80 ? "min-h-[40px]" : "min-h-[110px]")} />
                   )}
                 </div>
@@ -320,7 +320,7 @@ export default function ApplicationDetailPage() {
         </TabsContent>
 
         <TabsContent value="match">
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle>Score breakdown</CardTitle>
@@ -377,7 +377,7 @@ export default function ApplicationDetailPage() {
         </TabsContent>
 
         <TabsContent value="activity">
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Card>
               <CardHeader><CardTitle>Timeline</CardTitle></CardHeader>
               <CardContent><StatusTimeline history={app.history} /></CardContent>

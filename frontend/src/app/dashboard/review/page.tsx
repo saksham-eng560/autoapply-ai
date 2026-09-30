@@ -221,7 +221,7 @@ export default function SwipeReviewPage() {
         </div>
       )}
 
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_340px]">
         {/* ------------------------------------------------------------ deck */}
         <section aria-label="Job deck" className="flex flex-col items-center">
           <div className="relative mx-auto h-[600px] w-full max-w-[560px] sm:h-[640px]">

@@ -218,12 +218,15 @@ PIDS=""
 cleanup() {
   trap - INT TERM EXIT
   printf '\n'; say "Stopping AutoApply…"
-  for pid in $PIDS; do kill "$pid" 2>/dev/null || true; done
-  sleep 1
-  for pid in $PIDS; do kill -9 "$pid" 2>/dev/null || true; done
+  # Every service runs in its own process group: stop the whole group (npm → next → next-server, ...).
+  for pid in $PIDS; do kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true; done
+  sleep 2
+  for pid in $PIDS; do kill -KILL -- "-$pid" 2>/dev/null || true; done
   ok "Stopped. See you next scan."
 }
-trap cleanup INT TERM EXIT
+trap 'cleanup; exit 130' INT TERM
+trap cleanup EXIT
+set -m  # background jobs get their own process groups, so cleanup can stop their children too
 
 run_bg() {  # run_bg <name> <dir> <command...>
   local name="$1" dir="$2"; shift 2
@@ -260,10 +263,10 @@ wait_for "http://127.0.0.1:$API_PORT/health" 90 "API" || { tail -n 40 "$LOG_DIR/
 if [ "$PROD" = 1 ]; then
   say "Building the dashboard (production)…"
   (cd frontend && npm run build >"$LOG_DIR/web-build.log" 2>&1) || { tail -n 40 "$LOG_DIR/web-build.log"; die "Dashboard build failed"; }
-  run_bg web "$ROOT/frontend" npx next start -p "$WEB_PORT"
+  run_bg web "$ROOT/frontend" node_modules/.bin/next start -p "$WEB_PORT"
 else
   say "Starting the dashboard…"
-  run_bg web "$ROOT/frontend" npx next dev -p "$WEB_PORT"
+  run_bg web "$ROOT/frontend" node_modules/.bin/next dev -p "$WEB_PORT"
 fi
 wait_for "http://127.0.0.1:$WEB_PORT/api/health" 180 "Dashboard" || { tail -n 40 "$LOG_DIR/web.log"; die "Dashboard did not start (logs/web.log)"; }
 

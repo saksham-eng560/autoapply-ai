@@ -123,7 +123,7 @@ function EmailsInner() {
         description={integrations?.google.gmail ? `Monitoring ${integrations.google.email}${integrations.google.last_polled_at ? ` · checked ${timeAgo(integrations.google.last_polled_at)}` : ""}` : "Connect Gmail in Settings to monitor recruiter replies."}
         actions={integrations?.google.gmail && <Button variant="outline" onClick={checkNow}><RefreshCw /> Check now</Button>} />
       <div className="mb-4 flex flex-wrap gap-2">
-        <Select className="w-52" value={intent} onChange={(e) => setIntent(e.target.value)}>
+        <Select className="w-52" aria-label="Filter by intent" value={intent} onChange={(e) => setIntent(e.target.value)}>
           <option value="">All intents</option>
           {["interview_invite", "offer", "assessment", "info_request", "follow_up", "rejection", "acknowledgment", "generic"].map((i) => <option key={i} value={i}>{titleCase(i)}</option>)}
         </Select>
@@ -133,7 +133,7 @@ function EmailsInner() {
         <EmptyState icon={Inbox} title="No recruiter e-mails yet"
           description={integrations?.google.gmail ? "Replies from companies you applied to will show up here automatically." : "Connect your Google account under Settings → Integrations."} />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-2">
             {data.items.map((c) => (
               <button key={c.id} onClick={() => setSelected(c.id)}

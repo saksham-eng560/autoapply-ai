@@ -52,24 +52,24 @@ function AddInterview({ open, onOpenChange, onCreated }: { open: boolean; onOpen
       footer={<><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} loading={loading} disabled={!form.application_id || !form.scheduled_at}>Add interview</Button></>}>
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <Label>Application</Label>
-          <Select value={form.application_id} onChange={(e) => setForm({ ...form, application_id: e.target.value })}>
+          <Label htmlFor="iv-application">Application</Label>
+          <Select id="iv-application" value={form.application_id} onChange={(e) => setForm({ ...form, application_id: e.target.value })}>
             <option value="">Select…</option>
             {apps?.items.map((a) => <option key={a.id} value={a.id}>{a.job?.company_name} — {a.job?.role_title}</option>)}
           </Select>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5"><Label>Date & time</Label><Input type="datetime-local" value={form.scheduled_at} onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })} /></div>
-          <div className="space-y-1.5"><Label>Duration (min)</Label><Input type="number" min={5} value={form.duration_minutes} onChange={(e) => setForm({ ...form, duration_minutes: Number(e.target.value) })} /></div>
+          <div className="space-y-1.5"><Label htmlFor="iv-when">Date & time</Label><Input id="iv-when" type="datetime-local" value={form.scheduled_at} onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })} /></div>
+          <div className="space-y-1.5"><Label htmlFor="iv-duration">Duration (min)</Label><Input id="iv-duration" type="number" min={5} value={form.duration_minutes} onChange={(e) => setForm({ ...form, duration_minutes: Number(e.target.value) })} /></div>
         </div>
         <div className="space-y-1.5">
-          <Label>Type</Label>
-          <Select value={form.interview_type} onChange={(e) => setForm({ ...form, interview_type: e.target.value })}>
+          <Label htmlFor="iv-type">Type</Label>
+          <Select id="iv-type" value={form.interview_type} onChange={(e) => setForm({ ...form, interview_type: e.target.value })}>
             {TYPES.map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
           </Select>
         </div>
-        <div className="space-y-1.5"><Label>Meeting link</Label><Input placeholder="https://zoom.us/j/…" value={form.meeting_link} onChange={(e) => setForm({ ...form, meeting_link: e.target.value })} /></div>
-        <div className="space-y-1.5"><Label>Location (on-site)</Label><Input value={form.physical_location} onChange={(e) => setForm({ ...form, physical_location: e.target.value })} /></div>
+        <div className="space-y-1.5"><Label htmlFor="iv-link">Meeting link</Label><Input id="iv-link" placeholder="https://zoom.us/j/…" value={form.meeting_link} onChange={(e) => setForm({ ...form, meeting_link: e.target.value })} /></div>
+        <div className="space-y-1.5"><Label htmlFor="iv-location">Location (on-site)</Label><Input id="iv-location" value={form.physical_location} onChange={(e) => setForm({ ...form, physical_location: e.target.value })} /></div>
       </div>
     </Modal>
   );
@@ -176,10 +176,10 @@ function InterviewsInner() {
       {!upcoming?.items.length && !past?.items.length ? (
         <EmptyState icon={CalendarPlus} title="No interviews yet" description="When a recruiter invites you, the agent adds it here and to your calendar with prep notes." />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
           <div className="space-y-4">
-            <div><p className="mb-2 text-sm font-medium">Upcoming</p><div className="space-y-2">{upcoming?.items.length ? renderList(upcoming.items) : <p className="text-sm text-muted-foreground">None scheduled.</p>}</div></div>
-            {!!past?.items.length && <div><p className="mb-2 text-sm font-medium">Past</p><div className="space-y-2">{renderList(past.items)}</div></div>}
+            <div><p className="label-caps mb-2 text-[10px] text-muted-foreground">Upcoming</p><div className="space-y-2">{upcoming?.items.length ? renderList(upcoming.items) : <p className="text-sm text-muted-foreground">None scheduled.</p>}</div></div>
+            {!!past?.items.length && <div><p className="label-caps mb-2 text-[10px] text-muted-foreground">Past</p><div className="space-y-2">{renderList(past.items)}</div></div>}
           </div>
           <div>{selected && <InterviewDetail id={selected} onChanged={refresh} />}</div>
         </div>

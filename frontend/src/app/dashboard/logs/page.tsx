@@ -55,14 +55,14 @@ function LogsInner() {
   return (
     <div>
       <PageHeader title="Agent logs" description="An audit trail of every scan, preparation and submission the agent performed." />
-      <Select className="mb-4 w-48" value={type} onChange={(e) => setType(e.target.value)}>
+      <Select className="mb-4 w-48" aria-label="Run type" value={type} onChange={(e) => setType(e.target.value)}>
         <option value="">All runs</option>
         <option value="scan">Scans</option>
         <option value="prepare">Preparations</option>
         <option value="apply">Submissions</option>
       </Select>
       {!data?.items.length ? <EmptyState icon={ScrollText} title="No agent runs yet" description="Start a scan from the Overview page." /> : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-2">
             {data.items.map((r) => (
               <button key={r.id} onClick={() => setSelected(r.id)}

@@ -135,26 +135,26 @@ export default function JobsPage() {
       <div className="mb-4 grid gap-2 md:grid-cols-[1fr_repeat(4,10rem)]">
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Search title, company, location…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          <Input className="pl-9" placeholder="Search title, company, location…" aria-label="Search jobs" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         </div>
-        <Select value={platform} onChange={(e) => { setPlatform(e.target.value); setPage(1); }}>
+        <Select aria-label="Source" value={platform} onChange={(e) => { setPlatform(e.target.value); setPage(1); }}>
           <option value="">All sources</option>
           {["linkedin", "indeed", "glassdoor", "wellfound", "greenhouse", "lever", "ashby", "workday", "custom"].map((p) => (
             <option key={p} value={p}>{PLATFORM_LABELS[p]}</option>
           ))}
         </Select>
-        <Select value={remote} onChange={(e) => { setRemote(e.target.value); setPage(1); }}>
+        <Select aria-label="Location" value={remote} onChange={(e) => { setRemote(e.target.value); setPage(1); }}>
           <option value="">Any location</option>
           <option value="true">Remote only</option>
           <option value="false">On-site / hybrid</option>
         </Select>
-        <Select value={minScore} onChange={(e) => { setMinScore(e.target.value); setPage(1); }}>
+        <Select aria-label="Minimum match score" value={minScore} onChange={(e) => { setMinScore(e.target.value); setPage(1); }}>
           <option value="">Any score</option>
           <option value="80">80+</option>
           <option value="60">60+</option>
           <option value="40">40+</option>
         </Select>
-        <Select value={sort} onChange={(e) => setSort(e.target.value)}>
+        <Select aria-label="Sort jobs" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="match">Best match</option>
           <option value="recent">Recently found</option>
           <option value="posted">Recently posted</option>

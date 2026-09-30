@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { TagInput } from "@/components/tag-input";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ function Section({ title, children, onAdd }: { title: string; children: React.Re
   return (
     <section className="border p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="font-semibold">{title}</h3>
+        <h3 className="text-sm font-bold uppercase leading-none tracking-[0.12em]">{title}</h3>
         {onAdd && <Button type="button" variant="ghost" size="sm" onClick={onAdd}><Plus /> Add</Button>}
       </div>
       <div className="space-y-4">{children}</div>
@@ -23,10 +24,11 @@ function Section({ title, children, onAdd }: { title: string; children: React.Re
 }
 
 function Field({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
+      <Input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
     </div>
   );
 }
@@ -54,7 +56,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
       </Section>
 
       <Section title="Summary">
-        <Textarea value={value.summary} onChange={(e) => set("summary", e.target.value)} className="min-h-[90px]" />
+        <Textarea aria-label="Summary" value={value.summary} onChange={(e) => set("summary", e.target.value)} className="min-h-[90px]" />
       </Section>
 
       <Section title="Experience" onAdd={() => set("experience", [...value.experience, { company: "", title: "", start_date: "", end_date: "", location: "", bullets: [] }])}>
@@ -69,7 +71,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
             </div>
             <div className="mt-3 space-y-1">
               <Label className="text-xs text-muted-foreground">Achievements (one per line)</Label>
-              <Textarea value={exp.bullets.join("\n")} onChange={(e) => updateAt("experience", i, { bullets: linesToList(e.target.value) })} className="min-h-[110px]" />
+              <Textarea aria-label="Achievements (one per line)" value={exp.bullets.join("\n")} onChange={(e) => updateAt("experience", i, { bullets: linesToList(e.target.value) })} className="min-h-[110px]" />
             </div>
             <Button type="button" variant="ghost" size="sm" className="mt-2 text-destructive" onClick={() => removeAt("experience", i)}><Trash2 /> Remove</Button>
           </div>
@@ -101,11 +103,11 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
             </div>
             <div className="mt-3 space-y-1">
               <Label className="text-xs text-muted-foreground">Description</Label>
-              <Textarea value={p.description} onChange={(e) => updateAt("projects", i, { description: e.target.value })} />
+              <Textarea aria-label="Description" value={p.description} onChange={(e) => updateAt("projects", i, { description: e.target.value })} />
             </div>
             <div className="mt-3 space-y-1">
               <Label className="text-xs text-muted-foreground">Technologies</Label>
-              <TagInput value={p.technologies} onChange={(v) => updateAt("projects", i, { technologies: v })} placeholder="Type and press Enter" />
+              <TagInput aria-label="Technologies" value={p.technologies} onChange={(v) => updateAt("projects", i, { technologies: v })} placeholder="Type and press Enter" />
             </div>
             <Button type="button" variant="ghost" size="sm" className="mt-2 text-destructive" onClick={() => removeAt("projects", i)}><Trash2 /> Remove</Button>
           </div>
@@ -116,7 +118,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
         {(["technical", "tools", "languages", "soft_skills"] as const).map((k) => (
           <div key={k} className="space-y-1">
             <Label className="text-xs text-muted-foreground">{k === "soft_skills" ? "Soft skills" : k[0].toUpperCase() + k.slice(1)}</Label>
-            <TagInput value={value.skills[k]} onChange={(v) => set("skills", { ...value.skills, [k]: v })} placeholder="Type and press Enter" />
+            <TagInput aria-label={k === "soft_skills" ? "Soft skills" : k[0].toUpperCase() + k.slice(1)} value={value.skills[k]} onChange={(v) => set("skills", { ...value.skills, [k]: v })} placeholder="Type and press Enter" />
           </div>
         ))}
       </Section>
@@ -127,13 +129,13 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
             <Field label="Name" value={c.name} onChange={(v) => updateAt("certifications", i, { name: v })} />
             <Field label="Issuer" value={c.issuer} onChange={(v) => updateAt("certifications", i, { issuer: v })} />
             <Field label="Date" value={c.date} onChange={(v) => updateAt("certifications", i, { date: v })} />
-            <Button type="button" variant="ghost" size="icon" onClick={() => removeAt("certifications", i)} aria-label="Remove"><Trash2 /></Button>
+            <Button type="button" variant="ghost" size="icon" onClick={() => removeAt("certifications", i)} aria-label="Remove certification"><Trash2 /></Button>
           </div>
         ))}
       </Section>
 
       <Section title="Awards">
-        <TagInput value={value.awards} onChange={(v) => set("awards", v)} placeholder="Type and press Enter" />
+        <TagInput aria-label="Awards" value={value.awards} onChange={(v) => set("awards", v)} placeholder="Type and press Enter" />
       </Section>
     </div>
   );

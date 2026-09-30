@@ -265,6 +265,12 @@ def evaluate_application(
     return app
 
 
+def _swiped(db: Session, app: Application) -> bool:
+    """Re-read the decision: you may have swiped this card while the scan was still working."""
+    db.refresh(app, attribute_names=["status", "review_decision"])
+    return app.review_decision is not None
+
+
 def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str] | None = None,
              auto_prepare: bool = True, run: RunLog | None = None) -> AgentRun:
     run = run or RunLog(db, user, "scan", trigger)
@@ -291,6 +297,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
                 new_apps.append(app)
         run.run.jobs_discovered = len(new_apps)
         run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
+        checkpoint(db)  # embedding may call an API
         embed_jobs(db, jobs)
         checkpoint(db)
 
@@ -301,13 +308,15 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         if resume_vec is not None:
             new_apps.sort(key=lambda a: cosine_similarity(resume_vec, a.job.description_embedding), reverse=True)
         for idx, app in enumerate(new_apps):
+            use_llm = idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN
+            if use_llm or idx % 10 == 0:
+                checkpoint(db)  # cards reach Swipe Review as they're scored; no write lock held during an LLM call
+            if _swiped(db, app):
+                continue  # you kept / skipped it before the scan got to it
             try:
-                evaluate_application(db, user, app, master, use_llm=idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN,
-                                     resume_vec=resume_vec)
+                evaluate_application(db, user, app, master, use_llm=use_llm, resume_vec=resume_vec)
             except Exception as exc:  # noqa: BLE001
                 run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
-            if idx % 10 == 9:
-                checkpoint(db)  # cards reach Swipe Review while the rest are still being scored
         matched = [a for a in new_apps if a.status == ApplicationStatus.MATCHED]
         run.run.jobs_matched = len(matched)
         user.last_scan_at = datetime.now(UTC)
@@ -317,7 +326,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
             kept = 0
             if auto_keep is not None and master is not None:
                 for app in sorted(matched, key=lambda a: priority_key(a.match_score, a.job.deadline_date)):
-                    if (app.match_score or 0) >= int(auto_keep):
+                    if (app.match_score or 0) >= int(auto_keep) and not _swiped(db, app):
                         keep_application(db, user, app, decided_by="agent",
                                          note=f"Kept automatically (score {app.match_score} ≥ {auto_keep})")
                         kept += 1
@@ -403,6 +412,8 @@ def undo_review(db: Session, app: Application) -> Application:
     """Put a swiped job back on the deck (only while nothing has been prepared yet)."""
     if app.review_decision is None:
         raise ValueError("This job has not been swiped")
+    if app.review_decision == "skip" and app.status != ApplicationStatus.SKIPPED:
+        raise ValueError(f"This job is already {app.status.value.replace('_', ' ')}")
     if app.review_decision == "keep" and (app.status != ApplicationStatus.PREPARING or app.tailored_resume_id):
         raise ValueError("Preparation has already started — withdraw it from Applications instead")
     app.review_decision = None
@@ -443,8 +454,9 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
     if app is None:
         raise ValueError("Application not found")
     user = db.get(User, app.user_id)
-    if app.status == ApplicationStatus.MATCHED and app.reviewed_at is not None and app.review_decision is None:
-        logger.info("Skipping preparation of %s: the swipe was undone", app.id)
+    if app.status != ApplicationStatus.PREPARING:
+        # Stale task: the swipe was undone, the job was skipped, or a duplicate task already prepared it.
+        logger.info("Skipping preparation of %s: status is %s", app.id, app.status.value)
         return app
     run = RunLog(db, user, "prepare", "system")
     run.log(f"Preparing {app.job.role_title} @ {app.job.company_name}")
@@ -452,8 +464,6 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         master = get_master_resume(db, user)
         if master is None:
             raise ValueError("No master resume uploaded")
-        if app.status not in (ApplicationStatus.PREPARING,):
-            set_status(db, app, ApplicationStatus.PREPARING, "agent", "Preparing application")
         job = app.job
         checkpoint(db)
         if enrich_job(db, job):
@@ -464,6 +474,7 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
             app.match_score, app.match_reasoning, app.match_details = (
                 evaluation["match_score"], evaluation["reasoning"], evaluation)
 
+        checkpoint(db)  # never hold the write lock while waiting on the LLM
         tailored = tailor_resume(master.parsed_content, job)
         resume = Resume(
             user_id=user.id,
@@ -482,6 +493,9 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         run.log(f"Tailored resume ({tailored['method']}), {len(tailored['changes_made'])} changes, "
                 f"{len(tailored['violations'])} truthfulness corrections")
 
+        checkpoint(db)
+        if _undone(db, app, run):
+            return app
         if user.prefs.get("cover_letter_enabled", True):
             letter = generate_cover_letter(resume.parsed_content, job)
             app.cover_letter = letter["cover_letter"]
@@ -505,6 +519,8 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
 
         run.run.applications_prepared = 1
         checkpoint(db)
+        if _undone(db, app, run):
+            return app
         should_stage = settings.AUTO_STAGE_APPLICATIONS if stage is None else stage
         if should_stage:
             stage_application(db, str(app.id), run=run)
@@ -520,6 +536,16 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         notify(db, user, "agent_error", f"Could not prepare {app.job.company_name} application", str(exc)[:300],
                link=f"/dashboard/applications/{app.id}")
     return app
+
+
+def _undone(db: Session, app: Application, run: RunLog) -> bool:
+    """True (and the run is closed) when you undid or skipped the job while it was being prepared."""
+    db.refresh(app, attribute_names=["status", "review_decision"])
+    if app.status == ApplicationStatus.PREPARING:
+        return False
+    run.log(f"Preparation stopped: the job is now {app.status.value.replace('_', ' ')}")
+    run.finish("cancelled")
+    return True
 
 
 def enrich_job(db: Session, job: Job) -> bool:

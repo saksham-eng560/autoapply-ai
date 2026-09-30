@@ -4,11 +4,13 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function TagInput({ value, onChange, placeholder, className }: {
+export function TagInput({ value, onChange, placeholder, className, id, "aria-label": ariaLabel }: {
   value: string[];
   onChange: (value: string[]) => void;
   placeholder?: string;
   className?: string;
+  id?: string;
+  "aria-label"?: string;
 }) {
   const [draft, setDraft] = useState("");
   const add = (raw: string) => {
@@ -27,6 +29,8 @@ export function TagInput({ value, onChange, placeholder, className }: {
         </span>
       ))}
       <input
+        id={id}
+        aria-label={ariaLabel}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
