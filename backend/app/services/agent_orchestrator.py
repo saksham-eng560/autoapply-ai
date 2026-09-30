@@ -822,6 +822,17 @@ def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | No
     _mark_ready(db, user, app)
 
 
+def direct_submit_blocker(user: User, app: Application) -> str | None:
+    """Why the agent can't submit this application itself (None = your one click submits it).
+
+    Boards like Internshala only take applications from your own logged-in account.
+    """
+    site = (app.job.raw_data or {}).get("apply_on_site")
+    if site:
+        return f"{site} needs your own {site} login: apply there, then click “I Applied”."
+    return None
+
+
 def _mark_ready(db: Session, user: User, app: Application) -> None:
     set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", "Ready for your review")
     warn = f" ⚠️ {app.manual_review_reason}" if app.needs_manual_review and app.manual_review_reason else ""
