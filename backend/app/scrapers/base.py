@@ -57,7 +57,7 @@ class SearchQuery:
         if self.progress is not None:
             try:
                 self.progress(done, total)
-            except Exception:  # noqa: BLE001 - progress reporting must never break a scan
+            except Exception:  # progress reporting must never break a scan
                 logger.debug("progress callback failed", exc_info=True)
 
     def is_known(self, url: str | None) -> bool:
