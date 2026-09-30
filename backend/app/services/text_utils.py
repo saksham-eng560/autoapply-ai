@@ -196,3 +196,16 @@ def display_skill(skill: str) -> str:
     if skill and skill != key:  # already user-provided casing
         return skill.strip()
     return " ".join(w if any(c.isupper() for c in w) else w.capitalize() for w in key.split(" "))
+
+
+def clip(text: str, limit: int) -> str:
+    """Shorten to ``limit`` characters at a sentence or word boundary."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for mark in (". ", "! ", "? "):
+        pos = cut.rfind(mark)
+        if pos >= limit * 0.6:
+            return cut[: pos + 1].strip()
+    pos = cut.rfind(" ")
+    return (cut[:pos] if pos >= limit * 0.6 else cut).rstrip(" ,;:-")

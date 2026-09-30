@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -140,6 +141,8 @@ class LinkedInScraper(BaseScraper):
                 if types:
                     params += "&f_JT=" + "%2C".join(types)
                 for start in range(0, min(query.limit, 100), 25):
+                    if query.time_up():
+                        return self.filter(jobs, query)
                     try:
                         resp = self.request("GET", f"{SEARCH_URL}?{params}&start={start}")
                     except RateLimited:
@@ -149,22 +152,47 @@ class LinkedInScraper(BaseScraper):
                     summaries = parse_search_results(resp.text)
                     if not summaries:
                         break
+                    fresh = []
                     for summary in summaries:
                         if summary["id"] in seen or not query.matches_title(summary["title"]):
                             continue
                         seen.add(summary["id"])
-                        try:
-                            detail_resp = self.request("GET", DETAIL_URL.format(job_id=summary["id"]))
-                            detail = parse_job_detail(detail_resp.text) if detail_resp.status_code == 200 else {}
-                        except RateLimited:
-                            return self.filter(jobs, query)
-                        except ScraperError:
-                            detail = {}
-                        if detail.get("description"):
+                        fresh.append(summary)
+                    fresh = fresh[: max(0, query.limit - len(jobs))]
+                    details, limited = self._details(fresh, query)
+                    for summary in fresh:
+                        detail = details.get(summary["id"]) or {}
+                        if detail.get("description") or detail.get("known"):
                             jobs.append(self._build_job(summary, detail))
-                        if len(jobs) >= query.limit:
-                            return self.filter(jobs, query)
+                    if limited or len(jobs) >= query.limit:
+                        return self.filter(jobs, query)
         return self.filter(jobs, query)
+
+    def _details(self, summaries: list[dict[str, Any]], query: SearchQuery) -> tuple[dict[str, dict[str, Any]], bool]:
+        """Job details for a page of results, three at a time. Postings already saved aren't downloaded again."""
+        details: dict[str, dict[str, Any]] = {}
+        todo = []
+        for summary in summaries:
+            if query.is_known(f"https://www.linkedin.com/jobs/view/{summary['id']}/"):
+                details[summary["id"]] = {"known": True}
+            else:
+                todo.append(summary)
+        limited = False
+
+        def fetch(job_id: str) -> dict[str, Any]:
+            resp = self.request("GET", DETAIL_URL.format(job_id=job_id))
+            return parse_job_detail(resp.text) if resp.status_code == 200 else {}
+
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="scrape-linkedin") as pool:
+            futures = {pool.submit(fetch, s["id"]): s["id"] for s in todo}
+            for future in as_completed(futures):
+                try:
+                    details[futures[future]] = future.result()
+                except RateLimited:
+                    limited = True
+                except ScraperError:
+                    details[futures[future]] = {}
+        return details, limited
 
     def fetch_job(self, url: str) -> ScrapedJob | None:
         ref = parse_ats_url(url)

@@ -21,8 +21,11 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useAgentStatus, useMe } from "@/hooks/use-applications";
+import { applyScanProgress } from "@/hooks/use-scan";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { ScanIndicator } from "@/components/scan-progress";
 import { post } from "@/lib/api-client";
+import type { AgentStatus, ScanProgress } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: LucideIcon; badge?: "review" | "pending" };
@@ -86,6 +89,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         navigator.serviceWorker?.controller?.postMessage({ type: "notify", title: d.title, body: d.body, link: d.link });
       }
       mutate((key) => typeof key === "string" && (key.startsWith("/notifications") || key.startsWith("/agent")));
+    }
+    if (event.type === "scan_progress") {
+      const d = event.data as { run_id: string; progress: ScanProgress };
+      let known = true;
+      void mutate<AgentStatus>("/agent/status", (current) => {
+        const next = applyScanProgress(current, d.run_id, d.progress);
+        known = next !== current;
+        return next;
+      }, { revalidate: false }).then(() => {
+        if (!known) void mutate("/agent/status"); // a scan this page hasn't seen yet: fetch it
+      });
+      return;
     }
     if (event.type === "application_updated" || event.type === "agent_run_updated") {
       mutate((key) => typeof key === "string" && ["/applications", "/agent", "/analytics", "/jobs", "/review"].some((p) => key.startsWith(p)));
@@ -179,6 +194,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <span className="text-primary">/</span> {current?.label || "Dashboard"}
           </p>
           <div className="flex-1" />
+          <ScanIndicator run={status?.running_runs.find((r) => r.run_type === "scan") ?? null} />
           {!!status?.to_review && !pathname.startsWith("/dashboard/review") && (
             <Link href="/dashboard/review"
               className="label-caps mr-2 hidden items-center gap-2 border border-primary px-3 py-1.5 text-[11px] text-primary transition-colors hover:bg-primary hover:text-primary-foreground md:inline-flex">

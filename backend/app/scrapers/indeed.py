@@ -79,15 +79,18 @@ class IndeedScraper(BrowserScraper):
                             url += "&sc=0kf%3Aattr%28DSQF7%29%3B"
                         cards = parse_job_cards(self.browser_get(session, url, "#mosaic-provider-jobcards"))
                         for card in cards:
-                            if len(jobs) >= query.limit:
+                            if len(jobs) >= query.limit or query.time_up():
                                 break
                             if not query.matches_title(card.get("displayTitle") or ""):
                                 continue
-                            try:
-                                detail_html = self.browser_get(session, f"{base}/viewjob?jk={card.get('jobkey')}", "#jobDescriptionText")
-                                description = parse_description(detail_html)
-                            except ScraperError:
+                            detail_url = f"{base}/viewjob?jk={card.get('jobkey')}"
+                            if query.is_known(detail_url):  # already saved: no need to open it again
                                 description = ""
+                            else:
+                                try:
+                                    description = parse_description(self.browser_get(session, detail_url, "#jobDescriptionText"))
+                                except ScraperError:
+                                    description = ""
                             jobs.append(self.card_to_job(card, description, base))
         except BrowserUnavailable as exc:
             raise ScraperError(str(exc)) from exc

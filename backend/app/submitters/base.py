@@ -201,7 +201,30 @@ class BaseSubmitter:
         fields = extract_fields(page, self.form_root)
         return self.fill_fields(page, packet, fields)
 
-    def fill_fields(self, page: Any, packet: CandidatePacket, fields: list[FormField]) -> SubmissionResult:
+    def fill_fields(self, page: Any, packet: CandidatePacket, fields: list[FormField],
+                    root: str | None = None, handled: set[str] | None = None) -> SubmissionResult:
+        """Fill ``fields``, then look again: answering one question often reveals another
+        ("If yes, please explain", a city after a country). Up to two follow-up passes.
+        ``handled``: handles of fields the caller already took care of (e.g. a resume upload)."""
+        report, answers = self._fill_pass(page, packet, fields)
+        seen = {f.handle for f in fields} | (handled or set())
+        for _ in range(2):
+            try:
+                page.wait_for_timeout(400)
+                revealed = [f for f in extract_fields(page, root if root is not None else self.form_root)
+                            if f.handle not in seen and not f.value]
+            except Exception:  # noqa: BLE001 - the page navigated or closed; nothing more to fill here
+                break
+            if not revealed:
+                break
+            seen.update(f.handle for f in revealed)
+            more_report, more_answers = self._fill_pass(page, packet, revealed)
+            report.extend(more_report)
+            answers.extend(more_answers)
+        return self._summarize(report, answers, bool(fields))
+
+    def _fill_pass(self, page: Any, packet: CandidatePacket,
+                   fields: list[FormField]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         report: list[dict[str, Any]] = []
         questions: list[FormField] = []
         for f in fields:
@@ -233,19 +256,24 @@ class BaseSubmitter:
             ans = by_handle.get(q.handle)
             value = ans.get("answer") if ans else None
             ok = fill_field(page, q, value) if value not in (None, "") else False
+            if not ok and q.value and value in (None, ""):
+                ok = True  # nothing to change: the form already has a value here
+                value = q.value
             entry = self._report(q, "question", value, ok)
             if ans:
                 entry["confidence"] = ans.get("confidence")
                 entry["needs_user_review"] = ans.get("needs_user_review")
             report.append(entry)
+        return report, answers
 
+    def _summarize(self, report: list[dict[str, Any]], answers: list[dict[str, Any]], had_fields: bool) -> SubmissionResult:
         total = len([r for r in report if r["kind"] != "cover_letter" or r["required"]])
         unmapped = [r for r in report if r["status"] == "unmapped" and (r["required"] or r["kind"] != "question")]
         required_unmapped = [r for r in report if r["status"] == "unmapped" and r["required"]]
         ratio = len(unmapped) / total if total else 0
-        needs_review = bool(required_unmapped) or ratio > self.unmapped_review_threshold or not fields
+        needs_review = bool(required_unmapped) or ratio > self.unmapped_review_threshold or not had_fields
         reason = None
-        if not fields:
+        if not had_fields:
             reason = "No form fields were found on the application page"
         elif required_unmapped:
             reason = "Required fields need your input: " + ", ".join(r["label"][:60] for r in required_unmapped[:5])

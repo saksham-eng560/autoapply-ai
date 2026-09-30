@@ -7,7 +7,7 @@ from typing import Any
 
 from app.models.enums import ATSPlatform, JobType
 from app.scrapers.ats_detect import parse_ats_url
-from app.scrapers.base import BaseScraper, ScrapedJob, ScraperError, SearchQuery, parse_date
+from app.scrapers.base import BaseScraper, ScrapedJob, SearchQuery, parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +53,8 @@ class AshbyScraper(BaseScraper):
         return [self._to_job(board, item) for item in data.get("jobs", []) if item.get("isListed", True)]
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
-        jobs: list[ScrapedJob] = []
-        for board in query.sources.get("ashby_boards") or []:
-            try:
-                jobs.extend(self.filter(self.list_board(board.strip()), query))
-            except ScraperError as exc:
-                logger.warning("Ashby board %s failed: %s", board, exc)
+        jobs = self.map_sources(query.sources.get("ashby_boards") or [],
+                                lambda board: self.filter(self.list_board(board), query), query, "Ashby board")
         return jobs[: query.limit]
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

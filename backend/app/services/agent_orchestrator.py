@@ -21,17 +21,20 @@ answer. Anything the agent is unsure about still stops in "Needs approval".
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import tempfile
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -49,12 +52,14 @@ from app.services.application_service import set_status
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
+from app.services.llm import get_llm
 from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
 from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
 from app.services.rate_limiter import rate_limiter
 from app.services.resume_tailor import light_tailor, tailor_resume
+from app.services.scan_progress import ScanCancelled, ScanProgress
 from app.services.text_utils import dedupe_key, extract_skills
 
 logger = logging.getLogger(__name__)
@@ -186,30 +191,85 @@ def application_platform(job: Job) -> ATSPlatform:
 
 
 # --------------------------------------------------------------------------- discovery
-def discover_jobs(query: SearchQuery, platforms: list[str], run: RunLog | None = None) -> list[ScrapedJob]:
+def discover_jobs(query: SearchQuery, platforms: list[str], run: RunLog | None = None,
+                  progress: ScanProgress | None = None, tick: Callable[[], None] | None = None) -> list[ScrapedJob]:
+    """Search every platform at once (up to SCAN_SOURCE_CONCURRENCY). Sources are asked to wrap up
+    with what they have at 80% of SCAN_SOURCE_TIMEOUT_SECONDS; one still running at the limit is left
+    out of this scan so a single slow site never holds up the rest."""
     results: list[ScrapedJob] = []
     usable = [p for p in platforms if p in SCRAPERS]
-    with ThreadPoolExecutor(max_workers=min(4, max(1, len(usable)))) as pool:
-        futures = {pool.submit(SCRAPERS[p]().search, query): p for p in usable}
-        for future in as_completed(futures):
-            platform = futures[future]
-            try:
-                found = future.result()
-                results.extend(found)
-                if run:
-                    run.log(f"{platform}: found {len(found)} jobs")
-            except ScraperError as exc:
-                if run:
-                    run.log(f"{platform}: {exc}", level="error")
-            except Exception as exc:
-                logger.exception("Scraper %s crashed", platform)
-                if run:
-                    run.log(f"{platform}: unexpected error {type(exc).__name__}: {exc}", level="error")
+    if not usable:
+        return []
+
+    started = time.monotonic()
+    # Sources wrap up at 80% of the limit and return what they have; the hard limit is the backstop.
+    query = dataclasses.replace(query, deadline=started + settings.SCAN_SOURCE_TIMEOUT_SECONDS * 0.8)
+
+    def search(platform: str) -> list[ScrapedJob]:
+        if progress is None:
+            return SCRAPERS[platform]().search(query)
+        progress.source_started(platform)
+        scoped = dataclasses.replace(query, progress=lambda done, total: progress.source_step(platform, done, total))
+        return SCRAPERS[platform]().search(scoped)
+
+    pool = ThreadPoolExecutor(max_workers=max(1, min(settings.SCAN_SOURCE_CONCURRENCY, len(usable))),
+                              thread_name_prefix="scan-source")
+    futures = {pool.submit(search, p): p for p in usable}
+    pending = set(futures)
+    deadline = started + settings.SCAN_SOURCE_TIMEOUT_SECONDS
+    try:
+        while pending:
+            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            for future in done:
+                platform = futures[future]
+                try:
+                    found = future.result()
+                    results.extend(found)
+                    if run:
+                        run.log(f"{platform}: found {len(found)} jobs")
+                    if progress:
+                        progress.source_finished(platform, len(found))
+                except ScraperError as exc:
+                    if run:
+                        run.log(f"{platform}: {exc}", level="error")
+                    if progress:
+                        progress.source_finished(platform, 0, "failed", str(exc))
+                except Exception as exc:
+                    logger.exception("Scraper %s crashed", platform)
+                    if run:
+                        run.log(f"{platform}: unexpected error {type(exc).__name__}: {exc}", level="error")
+                    if progress:
+                        progress.source_finished(platform, 0, "failed", f"{type(exc).__name__}: {exc}")
+            if progress:
+                progress.found = len({j.source_url for j in results})
+            if tick:
+                tick()
+            if pending and time.monotonic() > deadline:
+                for future in pending:
+                    platform = futures[future]
+                    if run:
+                        run.log(f"{platform}: still searching after {settings.SCAN_SOURCE_TIMEOUT_SECONDS}s, "
+                                "left out of this scan", level="warning")
+                    if progress:
+                        progress.source_finished(platform, 0, "timeout")
+                break
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)  # a timed-out source finishes on its own
     # Deduplicate by URL
     unique: dict[str, ScrapedJob] = {}
     for job in results:
         unique.setdefault(job.source_url, job)
     return list(unique.values())
+
+
+def known_source_urls(db: Session, days: int = 30) -> frozenset[str]:
+    """Postings from sites with slow detail pages that are already saved (with a full description)."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    rows = db.scalars(select(Job.source_url).where(
+        Job.is_active.is_(True), Job.last_checked >= since, func.length(Job.description) >= 200,
+        Job.source_platform.in_([ATSPlatform.LINKEDIN, ATSPlatform.INDEED, ATSPlatform.GLASSDOOR]),
+    )).all()
+    return frozenset(rows)
 
 
 def ensure_application(db: Session, user: User, job: Job) -> tuple[Application, bool]:
@@ -227,43 +287,67 @@ def is_swipe_mode(prefs: dict[str, Any]) -> bool:
     return (prefs.get("review_mode") or "swipe") == "swipe"
 
 
-def evaluate_application(
-    db: Session, user: User, app: Application, master: Resume | None, use_llm: bool = True, resume_vec: list[float] | None = None
-) -> Application:
+def _precheck(db: Session, user: User, app: Application, master: Resume | None) -> tuple[bool, list[str]]:
+    """Cheap checks before scoring. Returns (needs_scoring, heads_up)."""
     job = app.job
     prefs = user.prefs
     swipe = is_swipe_mode(prefs)
-    threshold = int(prefs.get("auto_apply_threshold") or 80)
     keep, reason = prefilter(job, prefs, strict=not swipe)
     if not keep:
         app.match_score = 0
         app.match_reasoning = reason
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", reason)
-        return app
+        return False, []
     if already_applied_elsewhere(db, user, job):
         app.match_reasoning = "Already applied to the same role at this company"
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", app.match_reasoning)
-        return app
+        return False, []
     heads_up = filter_reasons(job, prefs)[1] if swipe else []
     if master is None:
         app.match_reasoning = "Upload a master resume to enable matching"
         if heads_up:
             app.match_details = {"heads_up": heads_up}
-        return app
-    if resume_vec is not None and job.description_embedding:
-        app.similarity_score = round(cosine_similarity(resume_vec, job.description_embedding), 4)
-    evaluation = evaluate_match(master.parsed_content, job, prefs, threshold, use_llm=use_llm)
+        return False, heads_up
+    return True, heads_up
+
+
+def _apply_evaluation(db: Session, user: User, app: Application, evaluation: dict[str, Any], heads_up: list[str],
+                      resume_vec: list[float] | None) -> None:
+    prefs = user.prefs
+    threshold = int(prefs.get("auto_apply_threshold") or 80)
+    if resume_vec is not None and app.job.description_embedding:
+        app.similarity_score = round(cosine_similarity(resume_vec, app.job.description_embedding), 4)
     app.match_score = evaluation["match_score"]
     app.match_reasoning = evaluation["reasoning"]
     app.match_details = {**evaluation, "heads_up": heads_up}
-    if swipe:
+    if is_swipe_mode(prefs):
         # Never skipped for a low score: you decide in Swipe Review.
         set_status(db, app, ApplicationStatus.MATCHED, "agent", f"Match score {app.match_score} — waiting for your swipe")
     elif evaluation["proceed_with_application"] and evaluation["match_score"] >= threshold:
         set_status(db, app, ApplicationStatus.MATCHED, "agent", f"Match score {app.match_score}")
     else:
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", f"Match score {app.match_score} below {threshold}")
+
+
+def evaluate_application(
+    db: Session, user: User, app: Application, master: Resume | None, use_llm: bool = True, resume_vec: list[float] | None = None
+) -> Application:
+    needs_scoring, heads_up = _precheck(db, user, app, master)
+    if not needs_scoring or master is None:
+        return app
+    threshold = int(user.prefs.get("auto_apply_threshold") or 80)
+    evaluation = evaluate_match(master.parsed_content, app.job, user.prefs, threshold, use_llm=use_llm)
+    _apply_evaluation(db, user, app, evaluation, heads_up, resume_vec)
     return app
+
+
+_SNAPSHOT_SKIP = {"description_embedding"}
+
+
+def job_snapshot(job: Job) -> Any:
+    """A plain, session-free copy of a job, safe to read from another thread."""
+    return SimpleNamespace(**{attr.key: getattr(job, attr.key) for attr in inspect(Job).column_attrs
+                              if attr.key not in _SNAPSHOT_SKIP})
 
 
 def _swiped(db: Session, app: Application) -> bool:
@@ -276,21 +360,26 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
              auto_prepare: bool = True, run: RunLog | None = None) -> AgentRun:
     run = run or RunLog(db, user, "scan", trigger)
     prefs = user.prefs
+    chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
+    progress = ScanProgress(db, run.run, [p for p in chosen if p in SCRAPERS])
     try:
         master = get_master_resume(db, user)
         query = SearchQuery.from_preferences(prefs, limit=int(prefs.get("max_jobs_per_source") or settings.MAX_JOBS_PER_SOURCE))
-        chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
+        query = dataclasses.replace(query, known_urls=known_source_urls(db))
         run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
-        checkpoint(db)
-        scraped = discover_jobs(query, chosen, run)
+        progress.set_phase("discovering", f"Searching {len(progress.sources)} job sources at once")
+        scraped = discover_jobs(query, chosen, run, progress=progress, tick=progress.tick)
         if query.focus is not None:
             scraped, dropped = balance_by_location(scraped, query.focus)
             if dropped:
                 run.log(f"Location focus: kept ~{query.focus.share}% of postings in {query.focus.country.title()} "
                         f"({dropped} from elsewhere left out this scan)")
+        progress.found = len(scraped)
+        progress.to_save = len(scraped)
+        progress.set_phase("saving", f"Saving {len(scraped)} postings")
         new_apps: list[Application] = []
         jobs: list[Job] = []
-        for sj in scraped:
+        for idx, sj in enumerate(scraped):
             try:
                 with db.begin_nested():
                     job, _created = upsert_job(db, sj)
@@ -301,9 +390,13 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
             jobs.append(job)
             if created:
                 new_apps.append(app)
+            progress.saved = idx + 1
+            progress.new = len(new_apps)
+            if idx % 25 == 24:
+                progress.tick()
         run.run.jobs_discovered = len(new_apps)
         run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
-        checkpoint(db)  # embedding may call an API
+        progress.set_phase("saving", f"Reading {len(new_apps)} new postings")  # embedding may call an API
         embed_jobs(db, jobs)
         checkpoint(db)
 
@@ -313,19 +406,13 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         # Rank by vector similarity so the most promising jobs get the (costly) LLM evaluation
         if resume_vec is not None:
             new_apps.sort(key=lambda a: cosine_similarity(resume_vec, a.job.description_embedding), reverse=True)
-        for idx, app in enumerate(new_apps):
-            use_llm = idx < settings.MAX_LLM_EVALUATIONS_PER_SCAN
-            if use_llm or idx % 10 == 0:
-                checkpoint(db)  # cards reach Swipe Review as they're scored; no write lock held during an LLM call
-            if _swiped(db, app):
-                continue  # you kept / skipped it before the scan got to it
-            try:
-                evaluate_application(db, user, app, master, use_llm=use_llm, resume_vec=resume_vec)
-            except Exception as exc:  # noqa: BLE001
-                run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+        progress.to_score = len(new_apps)
+        progress.set_phase("scoring", f"Scoring {len(new_apps)} new jobs against your resume")
+        score_applications(db, user, new_apps, master, resume_vec, run, progress)
         matched = [a for a in new_apps if a.status == ApplicationStatus.MATCHED]
         run.run.jobs_matched = len(matched)
         user.last_scan_at = datetime.now(UTC)
+        progress.set_phase("finishing", "Wrapping up")
 
         if is_swipe_mode(prefs):
             auto_keep = prefs.get("auto_keep_min_score")
@@ -339,6 +426,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
             waiting = len(matched) - kept
             run.log(f"{waiting} jobs are waiting for you in Swipe Review"
                     + (f"; {kept} kept automatically (score ≥ {auto_keep})" if kept else ""))
+            progress.finish("completed", f"{run.run.jobs_discovered} new jobs, {waiting} waiting for your swipe")
             run.finish("completed")
             notify(db, user, "scan_completed", "Job scan finished",
                    f"{run.run.jobs_discovered} new jobs — {waiting} waiting for your swipe.", link="/dashboard/review",
@@ -349,16 +437,100 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         if auto_prepare and master is not None:
             queued = queue_preparations(db, user, matched, run)
             run.log(f"Queued {queued} applications for preparation")
+        progress.finish("completed", f"{run.run.jobs_discovered} new jobs, {run.run.jobs_matched} matches")
         run.finish("completed")
         notify(db, user, "scan_completed", "Job scan finished",
                f"{run.run.jobs_discovered} new jobs, {run.run.jobs_matched} matches.", link="/dashboard/jobs",
                data={"run_id": str(run.run.id)})
+    except ScanCancelled:
+        run.log("Scan stopped by you; jobs already scored stay in Swipe Review")
+        progress.finish("cancelled", "Stopped")
+        run.finish("cancelled")
     except Exception as exc:
         logger.exception("Scan failed for user %s", user.id)
+        if not db.is_active:  # a failed flush: roll back so the failure itself can be recorded
+            db.rollback()
         run.log(f"Scan failed: {exc}", level="error")
+        progress.finish("failed", f"Scan failed: {exc}"[:200])
         run.finish("failed")
         notify(db, user, "agent_error", "Job scan failed", str(exc)[:300], link="/dashboard/logs")
     return run.run
+
+
+def score_applications(db: Session, user: User, apps: list[Application], master: Resume | None,
+                       resume_vec: list[float] | None, run: RunLog, progress: ScanProgress | None = None) -> None:
+    """Score new jobs. The best MAX_LLM_EVALUATIONS_PER_SCAN (by resume similarity) go to the LLM,
+    SCAN_LLM_CONCURRENCY at a time; the rest use the instant heuristic meanwhile. Cards reach Swipe
+    Review as they're scored, and a card you swipe mid-scan is left alone."""
+
+    def advance() -> None:
+        if progress is not None:
+            progress.scored += 1
+            progress.tick()
+
+    llm_count = settings.MAX_LLM_EVALUATIONS_PER_SCAN
+    parallel = master is not None and get_llm().available and settings.SCAN_LLM_CONCURRENCY > 1
+    if not parallel:
+        for idx, app in enumerate(apps):
+            use_llm = idx < llm_count
+            if use_llm or idx % 10 == 0:
+                checkpoint(db)  # cards reach Swipe Review as they're scored; no write lock held during an LLM call
+            if not _swiped(db, app):  # you kept / skipped it before the scan got to it
+                try:
+                    evaluate_application(db, user, app, master, use_llm=use_llm, resume_vec=resume_vec)
+                except Exception as exc:  # noqa: BLE001
+                    run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+            advance()
+        return
+
+    assert master is not None
+    prefs = user.prefs
+    threshold = int(prefs.get("auto_apply_threshold") or 80)
+    to_llm: list[tuple[Application, list[str], Any]] = []
+    for app in apps[:llm_count]:
+        try:
+            needs, heads_up = (False, []) if _swiped(db, app) else _precheck(db, user, app, master)
+        except Exception as exc:  # noqa: BLE001
+            run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+            needs, heads_up = False, []
+        if needs:
+            to_llm.append((app, heads_up, job_snapshot(app.job)))
+        else:
+            advance()
+    checkpoint(db)  # no write lock is held while the LLM works
+    pool = ThreadPoolExecutor(max_workers=max(1, min(settings.SCAN_LLM_CONCURRENCY, len(to_llm))),
+                              thread_name_prefix="scan-score")
+    futures = {pool.submit(evaluate_match, master.parsed_content, snap, prefs, threshold, use_llm=True): (app, heads_up)
+               for app, heads_up, snap in to_llm}
+    try:
+        for idx, app in enumerate(apps[llm_count:]):  # the long tail: instant heuristic while the LLM works
+            if idx % 10 == 0:
+                checkpoint(db)
+            if not _swiped(db, app):
+                try:
+                    evaluate_application(db, user, app, master, use_llm=False, resume_vec=resume_vec)
+                except Exception as exc:  # noqa: BLE001
+                    run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+            advance()
+        checkpoint(db)
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            for future in done:
+                app, heads_up = futures[future]
+                try:
+                    evaluation = future.result()
+                    if not _swiped(db, app):
+                        _apply_evaluation(db, user, app, evaluation, heads_up, resume_vec)
+                except Exception as exc:  # noqa: BLE001
+                    run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+                advance()
+            if done:
+                checkpoint(db)  # each scored card reaches Swipe Review right away
+            elif progress is not None:
+                progress.tick()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def focus_rank(job: Job, prefs: dict[str, Any]) -> tuple[int, int]:

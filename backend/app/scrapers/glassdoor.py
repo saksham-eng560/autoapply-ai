@@ -71,14 +71,17 @@ class GlassdoorScraper(BrowserScraper):
                         if query.remote:
                             url += "&remoteWorkType=1"
                         for item in parse_listings(self.browser_get(session, url, "li[data-test='jobListing']")):
-                            if len(jobs) >= query.limit:
+                            if len(jobs) >= query.limit or query.time_up():
                                 break
                             if not query.matches_title(item["title"]):
                                 continue
-                            try:
-                                description = parse_detail(self.browser_get(session, item["url"], "[class*='JobDetails_jobDescription']"))
-                            except ScraperError:
+                            if query.is_known(item["url"]):  # already saved: no need to open it again
                                 description = ""
+                            else:
+                                try:
+                                    description = parse_detail(self.browser_get(session, item["url"], "[class*='JobDetails_jobDescription']"))
+                                except ScraperError:
+                                    description = ""
                             sal = parse_salary(item["salary"])
                             jobs.append(
                                 ScrapedJob(

@@ -8,7 +8,7 @@ from typing import Any
 
 from app.models.enums import ATSPlatform
 from app.scrapers.ats_detect import parse_ats_url
-from app.scrapers.base import BaseScraper, ScrapedJob, ScraperError, SearchQuery, parse_date
+from app.scrapers.base import BaseScraper, ScrapedJob, SearchQuery, parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +19,17 @@ class GreenhouseScraper(BaseScraper):
     platform = ATSPlatform.GREENHOUSE
     rate_key = "greenhouse"
 
+    _names: dict[str, str] = {}  # board token -> company name, shared across scans
+
     def board_name(self, token: str) -> str:
+        if token in self._names:
+            return self._names[token]
         try:
-            return self.get_json(f"{API}/{token}").get("name") or token.title()
+            name = self.get_json(f"{API}/{token}").get("name") or token.title()
         except Exception:  # noqa: BLE001
             return token.replace("-", " ").title()
+        self._names[token] = name
+        return name
 
     def _to_job(self, token: str, company: str, item: dict[str, Any]) -> ScrapedJob:
         location = (item.get("location") or {}).get("name")
@@ -49,12 +55,8 @@ class GreenhouseScraper(BaseScraper):
         return [self._to_job(token, company, item) for item in data.get("jobs", [])]
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
-        jobs: list[ScrapedJob] = []
-        for token in query.sources.get("greenhouse_boards") or []:
-            try:
-                jobs.extend(self.filter(self.list_board(token.strip()), query))
-            except ScraperError as exc:
-                logger.warning("Greenhouse board %s failed: %s", token, exc)
+        jobs = self.map_sources(query.sources.get("greenhouse_boards") or [],
+                                lambda token: self.filter(self.list_board(token), query), query, "Greenhouse board")
         return jobs[: query.limit]
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

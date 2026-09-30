@@ -63,7 +63,7 @@ class LinkedInEasyApplySubmitter(BaseSubmitter):
         combined = SubmissionResult(success=True, stage="staged")
         for _ in range(MAX_STEPS):
             fields = extract_fields(page, MODAL)
-            step = self.fill_fields(page, packet, fields)
+            step = self.fill_fields(page, packet, fields, root=MODAL)
             combined.fields.extend(step.fields)
             combined.answers.extend(step.answers)
             if self._visible(page, SUBMIT):

@@ -22,6 +22,7 @@ AID = "[data-automation-id='{}']"
 NEXT_BUTTON = "[data-automation-id='bottom-navigation-next-button'], button:has-text('Save and Continue'), button:has-text('Next')"
 SUBMIT_BUTTON = "button:has-text('Submit'), [data-automation-id='bottom-navigation-next-button']:has-text('Submit')"
 MAX_PAGES = 10
+STEP_ROOT = "[data-automation-id='applyFlowPage'], main, form"
 
 WORKDAY_IDS = {
     "legalnamesection_firstname": "first_name",
@@ -111,7 +112,8 @@ class WorkdaySubmitter(BaseSubmitter):
         for _ in range(MAX_PAGES):
             if self._on_review_page(page):
                 break
-            fields = extract_fields(page, "[data-automation-id='applyFlowPage'], main, form")
+            fields = extract_fields(page, STEP_ROOT)
+            handled = {f.handle for f in fields}
             # "Use my last application" / resume upload pages
             upload = page.locator(f"{AID.format('file-upload-input-ref')}, input[type=file]")
             if upload.count() and packet.resume_path:
@@ -121,7 +123,7 @@ class WorkdaySubmitter(BaseSubmitter):
                 except Exception:  # noqa: BLE001
                     pass
                 fields = [f for f in fields if f.type != "file"]
-            step = self.fill_fields(page, packet, fields)
+            step = self.fill_fields(page, packet, fields, root=STEP_ROOT, handled=handled)
             combined.fields.extend(step.fields)
             combined.answers.extend(step.answers)
             if step.needs_manual_review and any(f["status"] == "unmapped" and f["required"] for f in step.fields):

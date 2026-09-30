@@ -63,7 +63,7 @@ class WellfoundScraper(BrowserScraper):
                         url = f"{BASE}/role/r/{_slug(keyword)}" if not location else f"{BASE}/role/l/{_slug(keyword)}/{_slug(location)}"
                         html = self.browser_get(session, url, "[data-test='StartupResult']")
                         for item in parse_apollo_jobs(next_data(html)):
-                            if len(jobs) >= query.limit:
+                            if len(jobs) >= query.limit or query.time_up():
                                 break
                             if not query.matches_title(item["title"]):
                                 continue

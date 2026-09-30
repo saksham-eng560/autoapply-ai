@@ -187,12 +187,8 @@ class GenericScraper(BaseScraper):
         return jobs
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
-        jobs: list[ScrapedJob] = []
-        for url in query.sources.get("career_pages") or []:
-            try:
-                jobs.extend(self.scrape_page(url.strip(), query))
-            except ScraperError as exc:
-                logger.warning("Career page %s failed: %s", url, exc)
+        jobs = self.map_sources(query.sources.get("career_pages") or [],
+                                lambda url: self.scrape_page(url, query), query, "Career page")
         return self.filter(jobs, query)
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

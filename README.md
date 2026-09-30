@@ -40,6 +40,8 @@ and shows you what is working.
 - [Swipe Review and mass applying](#swipe-review-and-mass-applying)
 - [Internships in India: Summer 2027, Delhi NCR first](#internships-in-india-summer-2027-delhi-ncr-first)
 - ["I Applied" and progress tracking](#i-applied-and-progress-tracking)
+- [Fast scans with a live progress bar](#fast-scans-with-a-live-progress-bar)
+- [How forms get filled](#how-forms-get-filled)
 - [How it works](#how-it-works)
 - [Quick start (Docker)](#quick-start-docker)
 - [Try the whole loop safely with the demo careers site](#try-the-whole-loop-safely-with-the-demo-careers-site)
@@ -244,6 +246,57 @@ its own section, **I Applied** (`/dashboard/applied`), and the agent stops worki
 
 The I Applied page shows how far your applications got (applied, heard back, interviewing, offers),
 lets you filter and search them, and update a status by hand when a recruiter calls instead of e-mailing.
+
+## Fast scans with a live progress bar
+
+A scan searches all your job sources **at the same time** and loads company boards (Greenhouse,
+Lever, Ashby, Workday, career pages) several at once. Postings it has already saved are not
+downloaded again, and Claude scores several jobs at once while the rest get an instant score. Cards
+land in Swipe Review as they're scored, so you can start swiping before the scan ends.
+
+While a scan runs, Overview and Swipe Review show a **progress bar**:
+- the percentage, time elapsed and time left;
+- the step it's on (search → save → score → done);
+- each source with its status and how many postings it found;
+- a **Stop** button. Jobs already scored stay in your deck.
+
+Every other page shows a compact "Scanning 42%" in the top bar.
+
+A slow site never holds up a scan. Each source wraps up with what it has at 80% of
+`SCAN_SOURCE_TIMEOUT_SECONDS` (240 s by default). One still running at the limit is left out of that
+scan, and the rest carry on. The speed settings are optional `.env` entries, and the defaults suit
+most setups:
+
+| Setting | Default | What it controls |
+|---|---|---|
+| `SCAN_SOURCE_CONCURRENCY` | 8 | job sources searched at the same time |
+| `SCRAPER_BOARD_CONCURRENCY` | 6 | company boards or pages loaded at once within a source |
+| `SCAN_LLM_CONCURRENCY` | 6 | jobs Claude scores at the same time |
+| `SCAN_SOURCE_TIMEOUT_SECONDS` | 240 | time limit for a single source |
+
+## How forms get filled
+
+For every field on an application form, the agent picks the right way to fill it and then **checks
+the page kept the value**. If it didn't, for example a React form that ignored the typing, it sets the
+value again the way the page expects.
+
+- **Dropdowns, radio buttons and suggestion lists** match the way forms word things. "India" picks
+  "India (+91)", not "British Indian Ocean Territory". "B.Tech" picks "Bachelor's Degree", "USA"
+  picks "United States" and "Bangalore" picks "Bengaluru". When no option really fits, the field is
+  left for you in Needs approval instead of taking a wrong answer.
+- **Dates and numbers** are typed the way the field expects. "2 weeks" becomes a real start date in a
+  date picker, "₹15,000" becomes `15000` in a number box, and a `DD/MM/YYYY` box gets that format.
+- **Length limits** are respected. A 300-character box gets an answer cut at a sentence or word
+  boundary.
+- **Follow-up questions** that appear after an answer ("If yes, please explain", a city after a
+  country) are found on a second look and filled too.
+- **Education and location questions** are answered from your resume: college, degree, branch,
+  graduation year, CGPA, city, country and phone country code. You can override any of them under
+  **Settings › Saved answers**.
+- **Facts are never guessed.** Date of birth, ID numbers, visa and work authorization are filled only
+  from your saved answers. Otherwise the application waits for you.
+- **Written answers** ("Why this internship?") are specific, grounded in your resume and the job,
+  and fit the field's length limit.
 
 ## How it works
 
