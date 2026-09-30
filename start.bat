@@ -16,13 +16,11 @@ if /i "%1"=="stop" (
   exit /b %errorlevel%
 )
 
-if not exist .env (
-  copy .env.example .env >nul
-  for /f "delims=" %%s in ('powershell -NoProfile -Command "[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]]).TrimEnd('=').Replace('+','-').Replace('/','_')"') do set SECRET=%%s
-  for /f "delims=" %%k in ('powershell -NoProfile -Command "$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).Replace('+','-').Replace('/','_')"') do set ENCKEY=%%k
-  powershell -NoProfile -Command "(Get-Content .env) -replace '^SECRET_KEY=.*', 'SECRET_KEY=%SECRET%' -replace '^ENCRYPTION_KEY=.*', 'ENCRYPTION_KEY=%ENCKEY%' | Set-Content .env"
-  echo [ok] Created .env with fresh secrets
-)
+if exist .env goto env_ready
+copy .env.example .env >nul
+powershell -NoProfile -Command "$rng = [Security.Cryptography.RandomNumberGenerator]::Create(); function Key([int]$n) { $b = New-Object byte[] $n; $rng.GetBytes($b); [Convert]::ToBase64String($b).Replace('+','-').Replace('/','_') }; $secret = (Key 48).TrimEnd('='); $enc = Key 32; (Get-Content .env) -replace '^SECRET_KEY=.*', ('SECRET_KEY=' + $secret) -replace '^ENCRYPTION_KEY=.*', ('ENCRYPTION_KEY=' + $enc) | Set-Content .env"
+echo [ok] Created .env with fresh secrets
+:env_ready
 
 echo [..] Building and starting AutoApply AI (the first build takes a few minutes)...
 docker compose up --build -d || exit /b 1
