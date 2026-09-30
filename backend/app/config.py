@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     EMAIL_POLL_MINUTES: int = 5
     MAX_JOBS_PER_SOURCE: int = 50
     MAX_LLM_EVALUATIONS_PER_SCAN: int = 40
+    # ---- Scan speed ----
+    SCAN_SOURCE_CONCURRENCY: int = 8  # job sources (platforms) searched at the same time
+    SCRAPER_BOARD_CONCURRENCY: int = 6  # company boards / pages fetched at once within one source
+    SCAN_LLM_CONCURRENCY: int = 6  # jobs scored by the LLM at the same time
+    SCAN_SOURCE_TIMEOUT_SECONDS: int = 240  # sources wrap up at 80% of this; one still running at 100% is left out
     AUTO_STAGE_APPLICATIONS: bool = True  # fill forms automatically after preparation
     DATA_RETENTION_DAYS: int = 730
 

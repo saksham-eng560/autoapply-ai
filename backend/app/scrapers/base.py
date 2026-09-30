@@ -7,6 +7,8 @@ import random
 import re
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -14,6 +16,7 @@ from typing import Any
 import httpx
 
 from app.automation.browser import USER_AGENTS
+from app.config import settings
 from app.models.enums import ATSPlatform, ExperienceLevel, JobType
 from app.services.location_focus import LocationFocus, get_focus, location_tier
 from app.services.rate_limiter import rate_limiter
@@ -40,6 +43,25 @@ class SearchQuery:
     limit: int = 50
     sources: dict[str, Any] = field(default_factory=dict)
     focus: LocationFocus | None = None  # e.g. India with Delhi NCR first (see services/location_focus.py)
+    # Postings already in the database: scrapers skip re-downloading their detail pages.
+    known_urls: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    # Called as progress(done, total) while a scraper works through boards / pages (scan progress bar).
+    progress: Callable[[int, int], None] | None = field(default=None, repr=False, compare=False)
+    # time.monotonic() after which a scraper should wrap up and return what it has so far.
+    deadline: float | None = field(default=None, repr=False, compare=False)
+
+    def time_up(self) -> bool:
+        return self.deadline is not None and time.monotonic() > self.deadline
+
+    def report(self, done: int, total: int) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(done, total)
+            except Exception:  # progress reporting must never break a scan
+                logger.debug("progress callback failed", exc_info=True)
+
+    def is_known(self, url: str | None) -> bool:
+        return bool(url) and url in self.known_urls
 
     @classmethod
     def from_preferences(cls, prefs: dict[str, Any], limit: int = 50) -> SearchQuery:
@@ -269,6 +291,36 @@ class BaseScraper(ABC):
             raise ScraperError(f"Not found: {url}")
         response.raise_for_status()
         return response.json()
+
+    def map_sources(self, items: Iterable[str], fetch: Callable[[str], list[ScrapedJob]], query: SearchQuery,
+                    label: str) -> list[ScrapedJob]:
+        """Fetch several boards / pages at once and return their jobs in the original order.
+
+        One failing board never stops the others; it is logged and skipped.
+        """
+        names = [str(i).strip() for i in items if str(i).strip()]
+        if not names:
+            return []
+        results: dict[int, list[ScrapedJob]] = {}
+        workers = max(1, min(settings.SCRAPER_BOARD_CONCURRENCY, len(names)))
+        done = 0
+        query.report(0, len(names))
+        def fetch_in_time(name: str) -> list[ScrapedJob]:
+            return [] if query.time_up() else fetch(name)  # out of time: skip the boards not started yet
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"scrape-{self.rate_key}") as pool:
+            futures = {pool.submit(fetch_in_time, name): idx for idx, name in enumerate(names)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results[idx] = future.result()
+                except RateLimited as exc:
+                    logger.warning("%s %s skipped: %s", label, names[idx], exc)
+                except Exception as exc:  # noqa: BLE001 - e.g. HTTP 403 on one board
+                    logger.warning("%s %s failed: %s", label, names[idx], exc)
+                done += 1
+                query.report(done, len(names))
+        return [job for idx in sorted(results) for job in results[idx]]
 
     @abstractmethod
     def search(self, query: SearchQuery) -> list[ScrapedJob]:

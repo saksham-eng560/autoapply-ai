@@ -172,16 +172,22 @@ class InternshalaScraper(BrowserScraper):
     rate_key = "internshala"
     requires_browser = False  # plain HTTP first; a browser only if Internshala challenges us
 
+    def _http_page(self, url: str) -> str | None:
+        """Plain HTTP. ``None`` when Internshala challenges the request and a real browser is needed."""
+        response = self.request("GET", url)
+        html = response.text
+        if response.status_code in (403, 503) or any(m in html[:20000] for m in BLOCK_MARKERS):
+            return None
+        if response.status_code == 404:
+            raise ScraperError(f"Not found: {url}")
+        if response.status_code >= 400:
+            raise ScraperError(f"HTTP {response.status_code} for {url}")
+        return html
+
     def _get(self, url: str, state: dict[str, Any]) -> str:
         if state.get("session") is None:
-            response = self.request("GET", url)
-            html = response.text
-            blocked = response.status_code in (403, 503) or any(m in html[:20000] for m in BLOCK_MARKERS)
-            if not blocked:
-                if response.status_code == 404:
-                    raise ScraperError(f"Not found: {url}")
-                if response.status_code >= 400:
-                    raise ScraperError(f"HTTP {response.status_code} for {url}")
+            html = self._http_page(url)
+            if html is not None:
                 return html
             try:  # fall back to a real browser for the rest of this scan
                 state["session"] = self.open_session().__enter__()
@@ -190,29 +196,52 @@ class InternshalaScraper(BrowserScraper):
         return self.browser_get(state["session"], url, "div.individual_internship")
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
+        urls = search_urls(query)
+        pages: dict[int, str] = {}
+        blocked: list[int] = []
+        errors: list[str] = []
+
+        def fetch(url: str) -> list[ScrapedJob]:  # search pages over plain HTTP, several at once
+            html = self._http_page(url)
+            if html is None:
+                blocked.append(urls.index(url))
+            else:
+                pages[urls.index(url)] = html
+            return []
+
+        self.map_sources(urls, fetch, query, "Internshala page")
+        if blocked:  # Internshala challenged plain HTTP: one browser, one page at a time
+            state: dict[str, Any] = {"session": None}
+            try:
+                state["session"] = self.open_session().__enter__()
+                cards = 0
+                for idx in sorted(blocked):
+                    if cards >= query.limit * 2 or query.time_up():
+                        break
+                    try:
+                        pages[idx] = self.browser_get(state["session"], urls[idx], "div.individual_internship")
+                        cards += len(parse_cards(pages[idx]))
+                    except ScraperError as exc:
+                        errors.append(str(exc))
+            except (ScraperError, BrowserUnavailable) as exc:
+                errors.append(f"Internshala blocked the request and no browser is available: {exc}")
+            finally:
+                if state.get("session") is not None:
+                    state["session"].__exit__(None, None, None)
         jobs: list[ScrapedJob] = []
         seen: set[str] = set()
-        state: dict[str, Any] = {"session": None}
-        errors: list[str] = []
-        try:
-            for url in search_urls(query):
-                if len(jobs) >= query.limit * 2:
-                    break
-                try:
-                    cards = parse_cards(self._get(url, state))
-                except ScraperError as exc:
-                    errors.append(str(exc))
+        for idx in sorted(pages):
+            if len(jobs) >= query.limit * 2:
+                break
+            for card in parse_cards(pages[idx]):  # pages are already scoped to your roles by category, so no title filter
+                if card["url"] in seen:
                     continue
-                for card in cards:  # pages are already scoped to your roles by category, so no title filter
-                    if card["url"] in seen:
-                        continue
-                    seen.add(card["url"])
-                    jobs.append(card_to_job(card))
-        finally:
-            if state.get("session") is not None:
-                state["session"].__exit__(None, None, None)
+                seen.add(card["url"])
+                jobs.append(card_to_job(card))
         if not jobs and errors:
             raise ScraperError(errors[0])
+        if not jobs and not pages and urls:
+            raise ScraperError("Internshala could not be reached")
         return self.filter(jobs, dataclasses.replace(query, keywords=[]))
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

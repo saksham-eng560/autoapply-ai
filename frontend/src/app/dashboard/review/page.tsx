@@ -7,6 +7,7 @@ import { Check, CheckCheck, FileText, Layers, Play, Radar, RotateCcw, Search, X 
 import { EmptyState } from "@/components/empty-state";
 import { AnimatedNumber } from "@/components/motion";
 import { PageHeader } from "@/components/page-header";
+import { ScanProgressPanel } from "@/components/scan-progress";
 import { DeckShadowCard, SwipeCard, type Decision, type SwipeCardHandle } from "@/components/swipe-card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useToast } from "@/components/ui/toast";
 import { useAgentStatus } from "@/hooks/use-applications";
+import { useScan } from "@/hooks/use-scan";
 import { ApiError, fetcher, post, put } from "@/lib/api-client";
 import type { ReviewCard, ReviewQueue, ReviewStats } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -59,7 +61,8 @@ export default function SwipeReviewPage() {
   const [busy, setBusy] = useState(false);
   const [bulkScore, setBulkScore] = useState(60);
   const [bulkPreviewScore, setBulkPreviewScore] = useState(60);
-  const [scanning, setScanning] = useState(false);
+  const scanner = useScan();
+  const scanning = scanner.busy;
   const topRef = useRef<SwipeCardHandle>(null);
 
   useEffect(() => { if (data?.stats) setStats(data.stats); }, [data?.stats]);
@@ -204,17 +207,7 @@ export default function SwipeReviewPage() {
     mutate((current) => current && { ...current, items: current.items.map((c) => c.application_id === fresh.application_id ? fresh : c) }, false);
   };
 
-  const scan = async () => {
-    setScanning(true);
-    try {
-      await post("/agent/start-scan", {});
-      toast({ title: "Scan started", description: "New jobs will land in this deck as they're scored.", tone: "success" });
-    } catch (err) {
-      toast({ title: "Could not start scan", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
-    } finally {
-      setScanning(false);
-    }
-  };
+  const scan = scanner.start;
 
   const s = stats || data?.stats;
 
@@ -224,11 +217,15 @@ export default function SwipeReviewPage() {
         description="Every job that passed your filters, best matches first. Keep it and the agent tailors, fills and applies. Skip it and it's gone. Nothing is skipped for you."
         actions={
           <>
-            <Button variant="outline" onClick={scan} loading={scanning}><Radar /> Scan for more</Button>
+            <Button variant="outline" onClick={scan} loading={scanning}>
+              {!scanning && <Radar />} {scanner.running ? `Scanning ${Math.round(scanner.progress?.percent ?? 0)}%` : "Scan for more"}
+            </Button>
             <Link href="/dashboard/applications" className={buttonVariants({ variant: "ghost" })}>Applications</Link>
           </>
         }
       />
+
+      <ScanProgressPanel scan={scanner} />
 
       <div className="mb-8 grid grid-cols-2 border sm:grid-cols-4 grid-lines">
         <StatCell label="Left to swipe" value={s?.remaining ?? "—"} accent />

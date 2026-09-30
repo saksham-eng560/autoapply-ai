@@ -15,6 +15,7 @@ from app.models.enums import ApplicationStatus
 from app.schemas.agent import StartScanRequest
 from app.scrapers import SCRAPERS
 from app.services.agent_orchestrator import get_master_resume
+from app.services.notifier import push_update
 from app.services.rate_limiter import rate_limiter
 from app.worker.dispatch import enqueue
 
@@ -95,8 +96,9 @@ def cancel_run(run_id: str, user: CurrentUser, db: DB) -> dict:
     if run is None or run.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
     if run.status == "running":
-        run.status = "cancelled"
+        run.status = "cancelled"  # a running scan notices within a second or two and stops
         run.completed_at = datetime.now(UTC)
+        push_update(str(user.id), "agent_run_updated", {"id": str(run.id), "status": "cancelled"})
     return run_out(run)
 
 

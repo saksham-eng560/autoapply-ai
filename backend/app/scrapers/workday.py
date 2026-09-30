@@ -74,6 +74,8 @@ class WorkdayScraper(BaseScraper):
                 data = resp.json()
                 postings = data.get("jobPostings") or []
                 for posting in postings:
+                    if query.time_up():
+                        return self.filter(jobs, query)
                     path = posting.get("externalPath")
                     if not path or path in seen:
                         continue
@@ -94,12 +96,8 @@ class WorkdayScraper(BaseScraper):
         return self.filter(jobs, query)
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
-        jobs: list[ScrapedJob] = []
-        for site_url in query.sources.get("workday_sites") or []:
-            try:
-                jobs.extend(self.search_site(site_url.strip(), query))
-            except ScraperError as exc:
-                logger.warning("Workday site %s failed: %s", site_url, exc)
+        jobs = self.map_sources(query.sources.get("workday_sites") or [],
+                                lambda site_url: self.search_site(site_url, query), query, "Workday site")
         return jobs[: query.limit]
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

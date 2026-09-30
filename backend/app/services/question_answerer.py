@@ -13,6 +13,7 @@ import difflib
 import logging
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from app.models.job import Job
@@ -20,7 +21,7 @@ from app.schemas.resume_content import ResumeContent
 from app.services import llm_schemas
 from app.services.job_matcher import estimate_years_experience, job_text
 from app.services.llm import LLMError, get_llm, render_prompt
-from app.services.text_utils import normalize_text, truncate
+from app.services.text_utils import clip, normalize_text, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -48,33 +49,95 @@ STANDARD_FIELDS: dict[str, dict[str, Any]] = {
     "postal_code": {"label": "ZIP / postal code", "type": "text"},
     "country": {"label": "Country", "type": "text"},
     "website": {"label": "Personal website / portfolio", "type": "text"},
+    "phone_country_code": {"label": "Phone country code (read from your resume's phone number if empty)", "type": "text"},
+    "school": {"label": "College / university (from your resume if empty)", "type": "text"},
+    "degree": {"label": "Degree, e.g. B.Tech Computer Science (from your resume if empty)", "type": "text"},
+    "major": {"label": "Major / branch / field of study (from your resume if empty)", "type": "text"},
+    "graduation_year": {"label": "Graduation year (from your resume if empty)", "type": "number"},
+    "gpa": {"label": "CGPA / GPA / percentage (from your resume if empty)", "type": "text"},
+    "date_of_birth": {"label": "Date of birth (only used when a form asks; never guessed)", "type": "text"},
     "workday_password": {"label": "Password to use when creating ATS accounts (stored encrypted)", "type": "password"},
 }
 
 DECLINE_PATTERNS = ("decline", "prefer not", "do not wish", "don't wish", "not wish to", "choose not", "not to disclose", "not specified")
 
 
+# Different ways forms spell the same answer (degree levels, countries): compared by canonical key.
+_ALIASES: list[tuple[str, re.Pattern[str]]] = [
+    ("phd", re.compile(r"\b(ph\.?\s?d|doctora(te|l)|doctor of)\b")),
+    ("master", re.compile(r"\b(master'?s?|m\.?\s?tech|m\.?\s?sc|m\.?\s?s|mba|m\.?\s?e|m\.?\s?a|post ?grad(uate)?|mca)\b")),
+    ("bachelor", re.compile(r"\b(bachelor'?s?|b\.?\s?tech|b\.?\s?e|b\.?\s?sc|b\.?\s?s|b\.?\s?a|bca|b\.?\s?com|undergrad(uate)?)\b")),
+    ("associate", re.compile(r"\bassociate'?s? degree\b|\bassociate'?s?$")),
+    ("high school", re.compile(r"\b(high school|secondary school|12th|class xii|hsc|ged)\b")),
+    ("india", re.compile(r"^(india|in|ind|bharat|\+?91)$|\bindia\b")),
+    ("united states", re.compile(r"^(us|usa|u\.s\.a?\.?|united states( of america)?|america|\+?1)$|\bunited states\b")),
+    ("united kingdom", re.compile(r"^(uk|u\.k\.|great britain|britain|england|united kingdom|\+?44)$|\bunited kingdom\b")),
+    ("canada", re.compile(r"^(ca|can|canada)$|\bcanada\b")),
+    ("delhi", re.compile(r"\b(new delhi|delhi)\b")),
+    ("bengaluru", re.compile(r"\b(bengaluru|bangalore)\b")),
+    ("gurugram", re.compile(r"\b(gurugram|gurgaon)\b")),
+    ("mumbai", re.compile(r"\b(mumbai|bombay)\b")),
+]
+
+
+def _canonical(text: str) -> str | None:
+    for key, pattern in _ALIASES:
+        if pattern.search(text):
+            return key
+    return None
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text))
+
+
 def choose_option(answer: str, options: list[str]) -> str:
-    """Return the option that best matches ``answer`` (exact > prefix > fuzzy)."""
+    """Return the option that best matches ``answer``; ``answer`` itself when none is a good match.
+
+    exact > yes/no > "decline" > same degree / country > whole-word overlap > close spelling.
+    Never falls back to an unrelated option (e.g. "India" never picks "British Indian Ocean Territory").
+    """
     if not options:
         return answer
     norm = normalize_text(answer)
     by_norm = {normalize_text(o): o for o in options}
     if norm in by_norm:
         return by_norm[norm]
-    if norm in ("yes", "no"):
+    if norm in ("yes", "no") or re.match(r"(yes|no)\b", norm):
+        head = "yes" if norm.startswith("yes") else "no"
         for o in options:
-            if normalize_text(o).startswith(norm):
+            if re.match(rf"{head}\b", normalize_text(o)):
                 return o
     if any(p in norm for p in DECLINE_PATTERNS):
         for o in options:
             if any(p in normalize_text(o) for p in DECLINE_PATTERNS):
                 return o
+    answer_words = _words(norm)
+    canon = _canonical(norm)
+    if canon:
+        same = [o for o in options if _canonical(normalize_text(o)) == canon]
+        if same:  # e.g. two bachelor's options: the one sharing the most words ("B.S." for "B.S. Computer Science")
+            return min(same, key=lambda o: (-len(answer_words & _words(normalize_text(o))), len(o)))
+    best, best_score = None, 0.0
+    for o in options:
+        option_words = _words(normalize_text(o))
+        if not answer_words or not option_words:
+            continue
+        shared = answer_words & option_words
+        if not shared:
+            continue
+        score = len(shared) / len(answer_words | option_words)
+        if answer_words <= option_words or option_words <= answer_words:
+            score += 0.5
+        if score > best_score:
+            best, best_score = o, score
+    if best is not None and best_score >= 0.5:
+        return best
     for o in options:
         on = normalize_text(o)
-        if norm and (norm in on or on in norm):
+        if len(norm) >= 4 and len(on) >= 4 and (re.search(rf"\b{re.escape(norm)}\b", on) or re.search(rf"\b{re.escape(on)}\b", norm)):
             return o
-    match = difflib.get_close_matches(norm, list(by_norm), n=1, cutoff=0.3)
+    match = difflib.get_close_matches(norm, list(by_norm), n=1, cutoff=0.6)
     return by_norm[match[0]] if match else answer
 
 
@@ -131,17 +194,64 @@ def _current(attr: str) -> Callable[[ResumeContent], str]:
     return lambda r: getattr(r.experience[0], attr) if r.experience else ""
 
 
+def _mapping_or(key: str, derive: Callable[[ResumeContent], str | None], confidence: float = 0.8) -> Callable[[_Ctx], tuple[str | None, float]]:
+    """Your saved answer; otherwise read it off your resume."""
+    def resolver(ctx: _Ctx) -> tuple[str | None, float]:
+        if ctx.m(key):
+            return ctx.m(key), 0.95
+        try:
+            value = derive(ctx.resume)
+        except (IndexError, AttributeError, ValueError):
+            value = None
+        return (value, confidence) if value else (None, 0.0)
+    return resolver
+
+
+def _edu(attr: str) -> Callable[[ResumeContent], str | None]:
+    return lambda r: getattr(r.education[0], attr) or None if r.education else None
+
+
+def _grad_year(r: ResumeContent) -> str | None:
+    if not r.education:
+        return None
+    m = re.search(r"(19|20)\d{2}", r.education[0].end_date or "")
+    return m.group(0) if m else None
+
+
+def _location_part(index: int) -> Callable[[ResumeContent], str | None]:
+    """'New Delhi, Delhi, India' -> city (0), state (1 of 3), country (last)."""
+    def derive(r: ResumeContent) -> str | None:
+        parts = [p.strip() for p in (r.personal_info.location or "").split(",") if p.strip()]
+        if not parts or "remote" in parts[0].lower():
+            return None
+        if index == -1:
+            return parts[-1] if len(parts) > 1 else None
+        if index == 1:
+            return parts[1] if len(parts) > 2 else None
+        return parts[0]
+    return derive
+
+
+def _dial_code(r: ResumeContent) -> str | None:
+    phone = (r.personal_info.phone or "").strip()
+    m = re.match(r"\+(\d{1,3})\b|\+(\d{1,3})[\s-]", phone)
+    if m:
+        return f"+{m.group(1) or m.group(2)}"
+    country = normalize_text(_location_part(-1)(r) or "")
+    return {"india": "+91", "united states": "+1", "usa": "+1", "united kingdom": "+44", "uk": "+44", "canada": "+1"}.get(country)
+
+
 RULES: list[tuple[re.Pattern[str], Callable[[_Ctx], tuple[str | None, float]]]] = [
     (re.compile(r"(?:require|need).{0,40}sponsor|sponsor.{0,40}(?:require|need)"), _mapping("requires_sponsorship")),
     (re.compile(r"authori[sz]ed to work|legally (?:able|eligible|authori)|right to work|work permit|eligible to work"), _mapping("work_authorization")),
     (re.compile(r"sponsor|visa status|h-?1b|immigration"), _mapping("requires_sponsorship")),
     (re.compile(r"relocat"), _mapping("willing_to_relocate")),
-    (re.compile(r"salary|compensation|pay expectation|expected (?:pay|ctc)|desired pay"), _salary),
+    (re.compile(r"salary|compensation|pay expectation|expected (?:pay|ctc|stipend)|desired pay|\bstipend\b|\bctc\b"), _salary),
     (re.compile(r"how many years|years of (?:professional |relevant |work )?experience"), _years),
     (re.compile(r"notice period|start date|when can you start|earliest.*start|available to start"), _mapping("notice_period", "2 weeks", 0.5)),
     (re.compile(r"how did you (?:hear|find|learn)|where did you (?:hear|find)|referr?al source|source of application"), _mapping("how_did_you_hear", "Job board", 0.6)),
     (re.compile(r"18 years|over 18|at least 18|legal age"), _mapping("over_18", "Yes", 0.8)),
-    (re.compile(r"highest (?:level of )?(?:education|degree)"), _mapping("highest_education")),
+    (re.compile(r"highest (?:level of )?(?:education|degree|qualification)"), _mapping_or("highest_education", _edu("degree"), 0.8)),
     (re.compile(r"pronoun"), _mapping("pronouns")),
     (re.compile(r"hispanic|latino"), _eeo("hispanic_latino")),
     (re.compile(r"gender|\bsex\b"), _eeo("gender")),
@@ -154,10 +264,21 @@ RULES: list[tuple[re.Pattern[str], Callable[[_Ctx], tuple[str | None, float]]]] 
     (re.compile(r"current (?:or most recent )?(?:company|employer)"), _profile(_current("company"))),
     (re.compile(r"current (?:or most recent )?(?:job )?title|current (?:role|position)"), _profile(_current("title"))),
     (re.compile(r"street address|^address"), _mapping("address")),
-    (re.compile(r"\bcity\b"), _mapping("city")),
-    (re.compile(r"\bstate\b|province"), _mapping("state")),
-    (re.compile(r"zip|postal"), _mapping("postal_code")),
-    (re.compile(r"country"), _mapping("country")),
+    (re.compile(r"country code|dial(?:ling)? code|phone code|calling code"), _mapping_or("phone_country_code", _dial_code, 0.85)),
+    (re.compile(r"current (?:city|location)|where are you (?:currently )?(?:located|based)|^location$"),
+     _mapping_or("city", lambda r: r.personal_info.location or None, 0.85)),
+    (re.compile(r"\bcity\b"), _mapping_or("city", _location_part(0))),
+    (re.compile(r"\bstate\b|province"), _mapping_or("state", _location_part(1), 0.7)),
+    (re.compile(r"zip|postal|pin ?code"), _mapping("postal_code")),
+    (re.compile(r"country"), _mapping_or("country", _location_part(-1))),
+    (re.compile(r"(?:university|college|school|institute|institution)(?: name)?\b|where did you study|alma mater"),
+     _mapping_or("school", _edu("institution"), 0.9)),
+    (re.compile(r"\bdegree\b|qualification"), _mapping_or("degree", _edu("degree"), 0.85)),
+    (re.compile(r"\bmajor\b|field of study|discipline|\bbranch\b|speciali[sz]ation|\bstream\b|area of study"),
+     _mapping_or("major", _edu("field"), 0.85)),
+    (re.compile(r"graduat(?:ion|e|ing)|passing year|year of passing|pass(?:ing)?[- ]out year|\bbatch\b"),
+     _mapping_or("graduation_year", _grad_year, 0.85)),
+    (re.compile(r"\bc?gpa\b|grade point|\bcgpa\b|percentage|aggregate marks"), _mapping_or("gpa", _edu("gpa"), 0.85)),
     (re.compile(r"\bi (?:agree|acknowledge|certify|consent|confirm|understand|have read)|privacy (?:policy|notice)|terms (?:of|and)|consent to|accurate and complete"),
      lambda c: ("Yes", 0.85)),
     (re.compile(r"previously (?:worked|been employed)|former employee|worked (?:here|for us) before"), lambda c: ("No", 0.6)),
@@ -192,22 +313,33 @@ def rule_based_answer(question: dict[str, Any], ctx: _Ctx) -> dict[str, Any] | N
     if options:
         chosen = choose_option(answer, options)
         if chosen not in options:
+            if not direct and not FACTUAL.search(text):
+                return None  # e.g. "Do you have a degree?" (Yes / No): a resume fact isn't an option, so ask the LLM
             confidence = min(confidence, 0.4)
         answer = chosen
     return {
         "question": question.get("question"),
         "field_type": field_type,
-        "answer": answer,
+        "answer": _fit(str(answer), question),
         "confidence": round(confidence, 2),
         "needs_user_review": confidence < 0.7,
         "source": "rule",
     }
 
 
+def _fit(answer: str, question: dict[str, Any]) -> str:
+    """Respect the field's character limit (cut at a sentence or word boundary)."""
+    limit = question.get("max_length")
+    if not limit or len(answer) <= int(limit):
+        return answer
+    return clip(answer, int(limit))
+
+
 # Facts about the candidate that must never be guessed: left blank for the user to answer at approval.
 FACTUAL = re.compile(
     r"sponsor|visa|immigration|authori[sz]ed to work|legally|right to work|work permit|eligible to work|citizen"
     r"|convict|criminal|felony|clearance|relocat|18 years|over 18|legal age|background check|drug (?:test|screen)"
+    r"|date of birth|\bdob\b|birth ?date|aadhaar|\bpan\b|passport|social security|\bssn\b"
 )
 
 # Standard answers learned from the user's approvals, so the same question is answered automatically next time.
@@ -295,12 +427,14 @@ def answer_questions(
                     field_mappings_json={k: v for k, v in field_mappings.items() if "password" not in k},
                     questions_json=[
                         {"question": q.get("question"), "field_type": q.get("field_type"), "options": q.get("options") or [],
-                         "required": bool(q.get("required"))}
+                         "required": bool(q.get("required")),
+                         **({"max_length": q["max_length"]} if q.get("max_length") else {})}
                         for _, q in pending
                     ],
+                    today=datetime.now(UTC).date().isoformat(),
                 ),
                 schema=llm_schemas.CUSTOM_ANSWERS_SCHEMA,
-                effort="low",
+                effort="medium",  # these answers go out under your name: worth a careful read
                 task="question_answering",
             )
             llm_answers = data.get("custom_answers") or []
@@ -320,7 +454,7 @@ def answer_questions(
                 answers[idx] = {
                     "question": q.get("question"),
                     "field_type": q.get("field_type") or a.get("field_type") or "text",
-                    "answer": answer,
+                    "answer": _fit(answer, q),
                     "confidence": round(max(0.0, min(1.0, confidence)), 2),
                     "needs_user_review": bool(a.get("needs_user_review")) or confidence < 0.7,
                     "source": "llm",
@@ -334,6 +468,8 @@ def answer_questions(
     result = []
     for idx, q in enumerate(questions):
         ans = answers[idx]
+        if ans.get("answer"):
+            ans["answer"] = _fit(str(ans["answer"]), q)
         if q.get("field_id"):
             ans["field_id"] = q["field_id"]
         if q.get("options"):

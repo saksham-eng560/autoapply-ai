@@ -237,6 +237,7 @@ def run_out(run: AgentRun, include_log: bool = False) -> dict[str, Any]:
         "started_at": iso(run.started_at),
         "completed_at": iso(run.completed_at),
         "duration_seconds": run.duration_seconds,
+        "progress": run.progress,
     }
     if include_log:
         out["log"] = run.log or []

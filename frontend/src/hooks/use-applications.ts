@@ -15,12 +15,17 @@ import type {
 
 const LIVE = { refreshInterval: 15000, revalidateOnFocus: true };
 
+/** Poll every 1.5 s while a scan runs (the WebSocket usually beats it), every 15 s otherwise. */
+const scanning = (status?: AgentStatus) => !!status?.running_runs.some((r) => r.run_type === "scan");
+
 export function useMe() {
   return useSWR<User>("/auth/me", fetcher);
 }
 
 export function useAgentStatus() {
-  return useSWR<AgentStatus>("/agent/status", fetcher, LIVE);
+  return useSWR<AgentStatus>("/agent/status", fetcher, {
+    ...LIVE, refreshInterval: (status?: AgentStatus) => (scanning(status) ? 1500 : LIVE.refreshInterval),
+  });
 }
 
 export function useOverview(days?: number) {

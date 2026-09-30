@@ -31,3 +31,5 @@ class AgentRun(Base):
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
 
     log: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, default=list)
+    # Live progress of a scan (phase, percent, per-source status); see services/scan_progress.py
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType)

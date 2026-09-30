@@ -57,12 +57,8 @@ class LeverScraper(BaseScraper):
         return [self._to_job(slug, item) for item in data]
 
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
-        jobs: list[ScrapedJob] = []
-        for slug in query.sources.get("lever_companies") or []:
-            try:
-                jobs.extend(self.filter(self.list_company(slug.strip()), query))
-            except ScraperError as exc:
-                logger.warning("Lever company %s failed: %s", slug, exc)
+        jobs = self.map_sources(query.sources.get("lever_companies") or [],
+                                lambda slug: self.filter(self.list_company(slug), query), query, "Lever company")
         return jobs[: query.limit]
 
     def fetch_job(self, url: str) -> ScrapedJob | None:

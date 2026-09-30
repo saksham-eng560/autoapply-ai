@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import useSWR from "swr";
 import {
   ArrowRight, ArrowUpRight, CalendarDays, CheckCircle2, Circle, Hand, Layers, Play, Radar, Send, Trophy,
@@ -10,15 +9,16 @@ import { ApplicationCard } from "@/components/application-card";
 import { StatTile, TimelineChart } from "@/components/analytics-charts";
 import { TunnelGrid } from "@/components/brand";
 import { FocusStrip } from "@/components/motion-graphics";
+import { ScanProgressPanel } from "@/components/scan-progress";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/components/ui/toast";
 import { useAgentStatus, useApplications, useIntegrations, useMe, useOverview } from "@/hooks/use-applications";
-import { ApiError, fetcher, post } from "@/lib/api-client";
+import { useScan } from "@/hooks/use-scan";
+import { fetcher } from "@/lib/api-client";
 import type { FieldMapping } from "@/lib/types";
 import { cn, formatDateTime, timeAgo, titleCase } from "@/lib/utils";
 
@@ -89,27 +89,14 @@ function SwipeBand({ count, onScan, scanning, disabled }: { count: number; onSca
 }
 
 export default function OverviewPage() {
-  const toast = useToast();
-  const { data: status, mutate: refreshStatus } = useAgentStatus();
+  const { data: status } = useAgentStatus();
+  const scan = useScan();
   const { data: overview, isLoading } = useOverview();
   const { data: pending } = useApplications({ status: "pending_approval", page_size: 5, sort: "match" });
   const { data: me } = useMe();
-  const [scanning, setScanning] = useState(false);
-
-  const running = status?.running_runs.find((r) => r.run_type === "scan");
-
-  const startScan = async () => {
-    setScanning(true);
-    try {
-      await post("/agent/start-scan", {});
-      toast({ title: "Scan started", description: "New jobs will land in Swipe Review as they're scored.", tone: "success" });
-      refreshStatus();
-    } catch (err) {
-      toast({ title: "Could not start scan", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
-    } finally {
-      setScanning(false);
-    }
-  };
+  const running = scan.running;
+  const startScan = scan.start;
+  const scanning = scan.starting;
 
   const totals = overview?.totals;
   return (
@@ -120,10 +107,11 @@ export default function OverviewPage() {
         description={status?.last_scan_at ? `Last scan ${timeAgo(status.last_scan_at)}${status.next_scan_at ? ` · next ${formatDateTime(status.next_scan_at)}` : ""}` : "Your agent hasn't scanned yet."}
         actions={
           <Button onClick={startScan} loading={scanning || !!running} disabled={!status?.has_master_resume}>
-            {!running && <Radar />} {running ? "Scanning…" : "Scan for jobs now"}
+            {!running && <Radar />} {running ? `Scanning ${Math.round(running.progress?.percent ?? 0)}%` : "Scan for jobs now"}
           </Button>
         }
       />
+      <ScanProgressPanel scan={scan} />
       {me && <FocusStrip prefs={me.preferences} />}
       <Onboarding />
       {status && <SwipeBand count={status.to_review} onScan={startScan} scanning={scanning || !!running} disabled={!status.has_master_resume} />}
@@ -147,7 +135,7 @@ export default function OverviewPage() {
         )}
       </div>
 
-      <div className="mt-8 grid gap-8 xl:grid-cols-3">
+      <div className="mt-8 grid grid-cols-1 gap-8 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <div>
@@ -189,7 +177,7 @@ export default function OverviewPage() {
         </Card>
       </div>
 
-      <div className="mt-8 grid gap-8 xl:grid-cols-3">
+      <div className="mt-8 grid grid-cols-1 gap-8 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader>
             <CardTitle>Activity — last 30 days</CardTitle>

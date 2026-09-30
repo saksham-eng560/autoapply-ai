@@ -267,7 +267,33 @@ export interface AgentRun {
   started_at: string;
   completed_at: string | null;
   duration_seconds: number | null;
+  progress?: ScanProgress | null;
   log?: { ts: string; level: string; message: string; data?: Record<string, unknown> }[];
+}
+
+export type ScanPhase = "discovering" | "saving" | "scoring" | "finishing" | "done" | "cancelled" | "failed";
+
+export interface ScanSourceProgress {
+  name: string;
+  status: "pending" | "running" | "done" | "failed" | "timeout";
+  found: number;
+  done: number;
+  total: number;
+  error?: string;
+}
+
+/** Live progress of a scan (agent_runs.progress), pushed over the WebSocket as `scan_progress`. */
+export interface ScanProgress {
+  phase: ScanPhase;
+  percent: number;
+  message: string;
+  sources: ScanSourceProgress[];
+  found: number;
+  new: number;
+  scored: number;
+  to_score: number;
+  eta_seconds: number | null;
+  updated_at: string;
 }
 
 export interface AgentStatus {
