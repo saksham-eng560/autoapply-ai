@@ -267,7 +267,11 @@ export default function ApplicationDetailPage() {
                     ))}
                   </div>
                 )}
-                {!app.tailored_resume && <p className="text-muted-foreground">No tailored resume yet.</p>}
+                {!app.tailored_resume && (
+                  <p className="text-muted-foreground">
+                    {app.tailored_resume_pdf_url ? "Your original resume file is sent unchanged (Settings › Mass apply › Resume to send)." : "No tailored resume yet."}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>

@@ -35,6 +35,7 @@ export interface Preferences {
   review_mode: "swipe" | "auto";
   auto_submit_kept: boolean;
   trust_generated_answers: boolean;
+  resume_strategy: "original" | "light" | "full";
   auto_keep_min_score: number | null;
   max_jobs_per_source: number | null;
   exclude_no_sponsorship: boolean;

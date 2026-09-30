@@ -43,6 +43,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     #          Swipe Review, and the jobs you keep are prepared and applied to.
     # "auto":  the original behaviour: jobs under auto_apply_threshold are skipped, the rest prepared.
     "review_mode": "swipe",
+    "resume_strategy": "original",  # original (your file, untouched) | light (reorder only) | full (AI rewrite)
     "auto_submit_kept": True,       # kept jobs are submitted once filled, unless a question needs you
     "trust_generated_answers": True,  # AI-written open-ended answers don't hold a kept job back
     "auto_keep_min_score": None,    # optionally keep jobs scoring at least this without swiping

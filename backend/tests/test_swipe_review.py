@@ -235,6 +235,7 @@ def test_undo_during_preparation_is_respected(auth_client: TestClient, master_re
 
     queued = _capture_enqueue(monkeypatch)
     app_id = _seed_queue(auth_client.get("/api/v1/auth/me").json()["email"], 1)[0]
+    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"resume_strategy": "full"}})
     assert auth_client.post(f"/api/v1/review/{app_id}", json={"decision": "keep"}).status_code == 200
     real_tailor = orch.tailor_resume
 
@@ -351,7 +352,8 @@ def test_no_write_lock_held_through_llm_calls(auth_client: TestClient, master_re
     monkeypatch.setattr("app.services.agent_orchestrator.fetch_job_from_url", lambda url: ScrapedJob(
         company_name="Board 0", role_title="Software Engineer Intern", description="Full description. " * 60,
         source_url=url, source_platform=ATSPlatform.GREENHOUSE))
-    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"target_roles": ["Software Engineer"]}})
+    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"target_roles": ["Software Engineer"],
+                                                                          "resume_strategy": "full"}})
     _scan(auth_client.get("/api/v1/auth/me").json()["email"])
     assert [p for p in probes if p[0] == "evaluate_match"] == [("evaluate_match", True)] * 3
 
@@ -374,3 +376,47 @@ def test_env_inline_comments_are_not_values(tmp_path) -> None:
     env.write_text("PROXY_URLS=    # comma-separated http://user:pass@host:port (A, B)\nGMAIL_PUBSUB_TOPIC=  # x\n")
     s = Settings(_env_file=str(env))
     assert s.proxy_urls == [] and s.GMAIL_PUBSUB_TOPIC is None
+
+
+# ------------------------------------------------------------------ which resume is sent
+def test_resume_strategies(auth_client: TestClient, monkeypatch) -> None:
+    import io
+
+    from app.core.database import session_scope
+    from app.core.storage import get_storage
+    from app.services import agent_orchestrator as orch
+    from app.services.pdf_generator import render_resume_pdf
+    from app.services.resume_parser import heuristic_parse
+    from tests.conftest import SAMPLE_RESUME_TEXT
+
+    _capture_enqueue(monkeypatch)
+    original = render_resume_pdf(heuristic_parse(SAMPLE_RESUME_TEXT)) + b"%ORIGINAL-MARKER"
+    r = auth_client.post("/api/v1/resumes/upload", files={"file": ("my.pdf", io.BytesIO(original), "application/pdf")})
+    assert r.status_code == 201
+    master_content = r.json()["parsed_content"]
+    email = auth_client.get("/api/v1/auth/me").json()["email"]
+    first, second = _seed_queue(email, 2)
+    assert auth_client.get("/api/v1/users/me/preferences").json()["resume_strategy"] == "original"
+
+    # original (default): the uploaded file is sent byte for byte
+    auth_client.post(f"/api/v1/review/{first}", json={"decision": "keep"})
+    _prepare(first)
+    with session_scope() as db:
+        app = db.get(Application, uuid.UUID(first))
+        assert app.tailored_resume_id is None
+        assert get_storage().read(app.tailored_resume_pdf_url) == original
+
+    # light: every sentence you wrote survives unchanged, only the order moves
+    assert auth_client.put("/api/v1/users/me/preferences",
+                           json={"preferences": {"resume_strategy": "light"}}).status_code == 200
+    auth_client.post(f"/api/v1/review/{second}", json={"decision": "keep"})
+    _prepare(second)
+    detail = auth_client.get(f"/api/v1/applications/{second}").json()
+    light = detail["tailored_resume"]["parsed_content"]
+    assert light["summary"] == master_content["summary"]
+    for before, after in zip(master_content["experience"], light["experience"], strict=True):
+        assert sorted(before["bullets"]) == sorted(after["bullets"])
+    assert sorted(light["skills"]["technical"]) == sorted(master_content["skills"]["technical"])
+    assert auth_client.put("/api/v1/users/me/preferences",
+                           json={"preferences": {"resume_strategy": "rewrite-it"}}).status_code == 422
+    assert orch.RESUME_STRATEGIES == ("original", "light", "full")

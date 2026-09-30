@@ -81,3 +81,70 @@ def test_normalize_resume_cleans_input() -> None:
     assert data["skills"]["technical"] == ["Python", "SQL"]
     assert data["experience"][0]["bullets"] == ["one", "two"]
     assert ResumeContent.model_validate(data).skills_text().startswith("Python")
+
+
+def test_pdf_with_one_text_object_per_word_is_rebuilt_into_lines() -> None:
+    """Canva / some Docs & LaTeX exports: the plain PDF reader returns one word per line."""
+    import io
+    import random
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    from app.services.resume_parser import extract_text, heuristic_parse
+
+    lines = ["Saksham Verma", "Noida | sakshamverma56000@gmail.com | +91 9310312915", "EXPERIENCE",
+             "Software Engineering Intern | AxisIQ | Remote Jan 2025 - Mar 2025",
+             "• Architected a full-stack async logistics platform using FastAPI and Leaflet",
+             "• Engineered a multi-criteria routing engine with weighted disruption penalties",
+             "SKILLS", "Python, FastAPI, Docker, Flutter"]
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=letter)
+    rnd, y = random.Random(1), 740
+    for line in lines:
+        x = 50.0
+        for word in line.split(" "):
+            pdf.drawString(x, y + rnd.choice([-0.6, 0, 0.6, 1.2]), word)  # every word its own object
+            x += pdf.stringWidth(word + " ", "Helvetica", 12)
+        y -= 18
+    pdf.save()
+
+    text = extract_text("resume.pdf", buf.getvalue())
+    assert "Software Engineering Intern | AxisIQ | Remote Jan 2025 - Mar 2025" in text
+    assert "• Engineered a multi-criteria routing engine with weighted disruption penalties" in text
+    parsed = heuristic_parse(text)
+    assert parsed["personal_info"]["name"] == "Saksham Verma"
+    assert len(parsed["experience"]) == 1 and len(parsed["experience"][0]["bullets"]) == 2
+
+
+def test_wrapped_bullets_education_table_and_project_stack() -> None:
+    from app.services.resume_parser import heuristic_parse
+
+    text = """ALEX KIM
++91 9000000000 | alex@example.com | LinkedIn | GitHub
+EDUCATION
+Degree / Course Year Institution Score
+B.Tech (Computer Science) 2024-Present Example Institute of Technology 9.1 CGPA
+CBSE, Class XII 2024 Example Public School, Delhi 92.4%
+PROJECTS
+Route Planner | Python · FastAPI · Docker | Link
+• Architected a routing engine with weighted penalties from real-time telemetry and traffic
+feeds to recommend safer routes.
+• Built a dashboard for live monitoring.
+Crop Doctor | Flutter · TensorFlow Lite
+• Deployed an on-device model that classifies leaf diseases for farmers in rural
+communities with no connectivity.
+ACHIEVEMENTS
+• Top 5 — Example Hackathon
+• Solved 300+ problems on LeetCode
+Example Institute of Technology · Delhi, India
+"""
+    parsed = heuristic_parse(text)
+    assert [p["name"] for p in parsed["projects"]] == ["Route Planner", "Crop Doctor"]
+    assert parsed["projects"][0]["technologies"][:3] == ["Python", "FastAPI", "Docker"]
+    assert "traffic feeds to recommend safer routes." in parsed["projects"][0]["description"]
+    edu = parsed["education"]
+    assert [e["degree"] for e in edu] == ["B.Tech (Computer Science)", "CBSE, Class XII"]
+    assert edu[0]["institution"] == "Example Institute of Technology" and edu[0]["gpa"] == "9.1 CGPA"
+    assert (edu[0]["start_date"], edu[0]["end_date"], edu[1]["end_date"]) == ("2024", "Present", "2024")
+    assert parsed["awards"] == ["Top 5 — Example Hackathon", "Solved 300+ problems on LeetCode"]
