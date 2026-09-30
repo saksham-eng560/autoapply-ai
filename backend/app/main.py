@@ -14,7 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
-from app.api import agent, analytics, applications, auth, communications, files, interviews, jobs, resumes, users
+from app.api import agent, analytics, applications, auth, communications, files, interviews, jobs, resumes, review, users
 from app.api.deps import limiter
 from app.config import settings
 from app.core.database import create_all, engine, wait_for_db
@@ -74,13 +74,13 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
 async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")  # resume PDFs preview in same-origin iframes
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     return response
 
 
 for router in (auth.router, users.router, resumes.router, jobs.router, applications.router, agent.router,
-               communications.router, interviews.router, analytics.router, files.router):
+               communications.router, interviews.router, analytics.router, review.router, files.router):
     app.include_router(router, prefix=settings.API_PREFIX)
 
 

@@ -79,6 +79,7 @@ export const STATUS_TONE: Record<ApplicationStatus, "default" | "info" | "succes
 };
 
 export const PLATFORM_LABELS: Record<string, string> = {
+  internships: "Internship lists",
   linkedin: "LinkedIn",
   indeed: "Indeed",
   glassdoor: "Glassdoor",

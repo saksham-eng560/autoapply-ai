@@ -10,12 +10,14 @@ from app.scrapers.generic import GenericScraper
 from app.scrapers.glassdoor import GlassdoorScraper
 from app.scrapers.greenhouse import GreenhouseScraper
 from app.scrapers.indeed import IndeedScraper
+from app.scrapers.internships import InternshipListScraper
 from app.scrapers.lever import LeverScraper
 from app.scrapers.linkedin import LinkedInScraper
 from app.scrapers.wellfound import WellfoundScraper
 from app.scrapers.workday import WorkdayScraper
 
 SCRAPERS: dict[str, type[BaseScraper]] = {
+    "internships": InternshipListScraper,
     "greenhouse": GreenhouseScraper,
     "lever": LeverScraper,
     "ashby": AshbyScraper,

@@ -87,6 +87,25 @@ JOBS = [
     ("Umbrella", "Data Engineer", "Remote", ATSPlatform.GREENHOUSE, "Airflow, dbt, Snowflake, SQL, Python.", (150000, 185000)),
 ]
 
+# Swipe Review deck: internships that passed the filters and wait for a keep / skip
+DECK = [
+    ("Figma", "Software Engineer Intern", "San Francisco, CA; New York, NY", ATSPlatform.GREENHOUSE, "Offers Sponsorship"),
+    ("Ramp", "Software Engineering Intern, Backend", "New York, NY", ATSPlatform.ASHBY, "Offers Sponsorship"),
+    ("Notion", "Software Engineer Intern", "San Francisco, CA", ATSPlatform.ASHBY, None),
+    ("Anthropic", "Research Engineer Intern", "San Francisco, CA", ATSPlatform.GREENHOUSE, "Offers Sponsorship"),
+    ("Vercel", "Software Engineer Intern, Frontend", "Remote in USA", ATSPlatform.GREENHOUSE, None),
+    ("Scale AI", "Machine Learning Engineer Intern", "San Francisco, CA", ATSPlatform.GREENHOUSE, "Does Not Offer Sponsorship"),
+    ("Replit", "Full Stack Engineer Intern", "Foster City, CA", ATSPlatform.ASHBY, None),
+    ("Perplexity", "AI Engineer Intern", "San Francisco, CA", ATSPlatform.ASHBY, "Offers Sponsorship"),
+    ("Palantir", "Forward Deployed Software Engineer Intern", "New York, NY", ATSPlatform.LEVER, "U.S. Citizenship is Required"),
+    ("Cloudflare", "Software Engineer Intern, Workers", "Austin, TX", ATSPlatform.GREENHOUSE, None),
+    ("Modal", "Infrastructure Engineer Intern", "New York, NY", ATSPlatform.ASHBY, "Offers Sponsorship"),
+    ("Robinhood", "Backend Software Engineer Intern", "Menlo Park, CA", ATSPlatform.GREENHOUSE, None),
+    ("Decagon", "Software Engineer Intern", "San Francisco, CA", ATSPlatform.ASHBY, None),
+    ("Zoox", "Software Engineer Intern, Simulation", "Foster City, CA", ATSPlatform.LEVER, "Does Not Offer Sponsorship"),
+]
+DECK_STACK = ["Python", "TypeScript", "React", "PostgreSQL", "Kubernetes", "Go", "Rust", "PyTorch", "AWS", "Kafka", "SQL", "Docker"]
+
 STATUS_PLAN = [
     ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.INTERVIEW,
     ApplicationStatus.SCREENING, ApplicationStatus.APPLIED, ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.REJECTED,
@@ -194,6 +213,24 @@ def main() -> None:
                                  prep_notes=f"ROLE: {title} at {company}\nHighlight: FastAPI APIs at 5M req/day, Kafka pipelines.",
                                  likely_questions=[{"question": "Walk me through a system you designed.",
                                                     "answer_outline": "Northwind API platform: scale, trade-offs, results."}]))
+        for idx, (company, title, location, platform, sponsorship) in enumerate(DECK):
+            stack = rnd.sample(DECK_STACK, 4)
+            description = (f"{title} at {company}. Summer 2027, 12 weeks. You'll ship production code with {', '.join(stack)} "
+                           f"alongside a mentor and present your project at the end of the summer.")
+            url = f"https://example.com/{company.lower().replace(' ', '')}/interns/{idx}"
+            job = db.scalar(select(Job).where(Job.source_url == url))
+            if job is None:
+                job = Job(company_name=company, role_title=title, description=description, location=location,
+                          is_remote="Remote" in location, source_platform=platform, job_type=JobType.INTERNSHIP,
+                          source_url=url, application_url=url, dedupe_key=dedupe_key(company, title, location),
+                          extracted_skills=extract_skills(description), posted_date=(now - timedelta(days=rnd.randint(0, 9))).date(),
+                          description_embedding=embed_text(description),
+                          raw_data={"listing_source": "simplify-internships", "sponsorship": sponsorship, "terms": ["Summer 2027"]})
+                db.add(job)
+                db.flush()
+            ev = heuristic_evaluation(content, job, prefs, 65)
+            db.add(Application(user_id=user.id, job_id=job.id, status=ApplicationStatus.MATCHED, match_score=ev["match_score"],
+                               match_reasoning=ev["reasoning"], match_details={**ev, "heads_up": []}, ats_platform=platform))
         db.add(AgentRun(user_id=user.id, run_type="scan", trigger="schedule", status="completed", jobs_discovered=len(JOBS),
                         jobs_matched=7, started_at=now - timedelta(hours=2), completed_at=now - timedelta(hours=2) + timedelta(seconds=74),
                         duration_seconds=74, log=[{"ts": (now - timedelta(hours=2)).isoformat(), "level": "info",

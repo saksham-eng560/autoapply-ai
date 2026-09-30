@@ -61,7 +61,9 @@ def list_applications(
             raise HTTPException(422, "Unknown status") from exc
         query = query.where(Application.status.in_(statuses))
     else:
-        query = query.where(Application.status.notin_([ApplicationStatus.DISCOVERED, ApplicationStatus.SKIPPED]))
+        # Jobs you haven't picked yet live in Swipe Review / Jobs, not in the applications pipeline.
+        query = query.where(Application.status.notin_([ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED,
+                                                       ApplicationStatus.SKIPPED]))
     if q:
         like = f"%{q.lower()}%"
         query = query.where(or_(func.lower(Job.role_title).like(like), func.lower(Job.company_name).like(like)))
@@ -153,6 +155,7 @@ def restage(application_id: str, user: CurrentUser, db: DB) -> dict:
     app = _get(db, user.id, application_id)
     if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED):
         raise HTTPException(status.HTTP_409_CONFLICT, "Only pending or failed applications can be re-staged")
+    app.auto_submit = False  # you're reviewing this one yourself now
     set_status(db, app, ApplicationStatus.PREPARING, "user", "Re-filling the form")
     enqueue("stage_application", str(app.id), after_commit=db)
     return _detail(db, app)
@@ -165,6 +168,7 @@ def reprepare(application_id: str, user: CurrentUser, db: DB) -> dict:
         raise HTTPException(status.HTTP_409_CONFLICT, "Already submitted / being submitted")
     if orch.get_master_resume(db, user) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a master resume first")
+    app.auto_submit = False
     set_status(db, app, ApplicationStatus.PREPARING, "user", "Re-preparing documents")
     enqueue("prepare_application", str(app.id), after_commit=db)
     return _detail(db, app)

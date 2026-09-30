@@ -64,13 +64,13 @@ function EmailDetail({ id, onChanged }: { id: string; onChanged: () => void }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {!!details.length && (
-          <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted/50 p-3 text-sm">
+          <div className="grid grid-cols-2 gap-2 bg-muted/50 p-3 text-sm">
             {details.map(([k, v]) => (
               <div key={k}><p className="text-xs text-muted-foreground">{titleCase(k)}</p><p className="break-words font-medium">{String(v)}</p></div>
             ))}
           </div>
         )}
-        <div className="prose-pre max-h-72 overflow-y-auto rounded-lg border p-3 text-muted-foreground">{email.body_text}</div>
+        <div className="prose-pre max-h-72 overflow-y-auto border p-3 text-muted-foreground">{email.body_text}</div>
         <div>
           <p className="mb-1.5 flex items-center gap-1.5 text-sm font-medium"><Reply className="h-4 w-4" /> Suggested reply</p>
           <Textarea value={reply} onChange={(e) => setReply(e.target.value)} className="min-h-[140px]" placeholder="No reply needed for this e-mail." />
@@ -123,7 +123,7 @@ function EmailsInner() {
         description={integrations?.google.gmail ? `Monitoring ${integrations.google.email}${integrations.google.last_polled_at ? ` · checked ${timeAgo(integrations.google.last_polled_at)}` : ""}` : "Connect Gmail in Settings to monitor recruiter replies."}
         actions={integrations?.google.gmail && <Button variant="outline" onClick={checkNow}><RefreshCw /> Check now</Button>} />
       <div className="mb-4 flex flex-wrap gap-2">
-        <Select className="w-52" value={intent} onChange={(e) => setIntent(e.target.value)}>
+        <Select className="w-52" aria-label="Filter by intent" value={intent} onChange={(e) => setIntent(e.target.value)}>
           <option value="">All intents</option>
           {["interview_invite", "offer", "assessment", "info_request", "follow_up", "rejection", "acknowledgment", "generic"].map((i) => <option key={i} value={i}>{titleCase(i)}</option>)}
         </Select>
@@ -133,11 +133,11 @@ function EmailsInner() {
         <EmptyState icon={Inbox} title="No recruiter e-mails yet"
           description={integrations?.google.gmail ? "Replies from companies you applied to will show up here automatically." : "Connect your Google account under Settings → Integrations."} />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-2">
             {data.items.map((c) => (
               <button key={c.id} onClick={() => setSelected(c.id)}
-                className={cn("block w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-accent/50", selected === c.id && "border-primary ring-1 ring-primary")}>
+                className={cn("block w-full border bg-card p-3 text-left transition-colors hover:bg-accent/50", selected === c.id && "border-primary ring-1 ring-primary")}>
                 <div className="flex items-center justify-between gap-2">
                   <p className={cn("truncate text-sm", c.is_action_required && !c.action_taken ? "font-semibold" : "font-medium")}>{c.sender_name || c.sender_email}</p>
                   <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(c.received_at)}</span>

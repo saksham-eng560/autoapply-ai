@@ -30,7 +30,15 @@ export interface Preferences {
     ashby_boards: string[];
     workday_sites: string[];
     career_pages: string[];
+    internship_lists?: string[];
   };
+  review_mode: "swipe" | "auto";
+  auto_submit_kept: boolean;
+  trust_generated_answers: boolean;
+  resume_strategy: "original" | "light" | "full";
+  auto_keep_min_score: number | null;
+  max_jobs_per_source: number | null;
+  exclude_no_sponsorship: boolean;
   discord_webhook_url: string | null;
   slack_webhook_url: string | null;
   timezone: string;
@@ -261,6 +269,36 @@ export interface AgentStatus {
   scan_enabled: boolean;
   google_connected: boolean;
   linkedin_connected: boolean;
+  to_review: number;
+  review_mode: "swipe" | "auto";
+}
+
+export interface ReviewCard {
+  application_id: string;
+  status: ApplicationStatus;
+  match_score: number | null;
+  match_reasoning: string | null;
+  strong_matches: string[];
+  missing_skills: string[];
+  heads_up: string[];
+  scores: Partial<Record<"skills_match" | "experience_match" | "industry_match" | "location_match" | "compensation_match", number>>;
+  job: Job & { description: string; sponsorship: string | null; terms: string[]; listing_source: string | null };
+  discovered_at: string | null;
+}
+
+export interface ReviewStats {
+  remaining: number;
+  kept_today: number;
+  skipped_today: number;
+  kept_total: number;
+}
+
+export interface ReviewQueue {
+  items: ReviewCard[];
+  matching: number;
+  stats: ReviewStats;
+  settings: { auto_submit_kept: boolean; review_mode: "swipe" | "auto" };
+  has_master_resume: boolean;
 }
 
 export interface Overview {

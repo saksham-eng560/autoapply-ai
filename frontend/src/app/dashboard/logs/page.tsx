@@ -32,7 +32,7 @@ function RunDetail({ id }: { id: string }) {
         </div>
       </CardHeader>
       <CardContent>
-        <div className="max-h-[560px] overflow-y-auto rounded-lg bg-muted/40 p-3 font-mono text-xs">
+        <div className="max-h-[560px] overflow-y-auto bg-muted/40 p-3 font-mono text-xs">
           {(run.log || []).map((entry, i) => (
             <div key={i} className="flex gap-3 py-0.5">
               <span className="shrink-0 text-muted-foreground">{new Date(entry.ts).toLocaleTimeString()}</span>
@@ -55,18 +55,18 @@ function LogsInner() {
   return (
     <div>
       <PageHeader title="Agent logs" description="An audit trail of every scan, preparation and submission the agent performed." />
-      <Select className="mb-4 w-48" value={type} onChange={(e) => setType(e.target.value)}>
+      <Select className="mb-4 w-48" aria-label="Run type" value={type} onChange={(e) => setType(e.target.value)}>
         <option value="">All runs</option>
         <option value="scan">Scans</option>
         <option value="prepare">Preparations</option>
         <option value="apply">Submissions</option>
       </Select>
       {!data?.items.length ? <EmptyState icon={ScrollText} title="No agent runs yet" description="Start a scan from the Overview page." /> : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-2">
             {data.items.map((r) => (
               <button key={r.id} onClick={() => setSelected(r.id)}
-                className={cn("flex w-full items-center justify-between rounded-lg border bg-card p-3 text-left text-sm hover:bg-accent/50", selected === r.id && "border-primary ring-1 ring-primary")}>
+                className={cn("flex w-full items-center justify-between border bg-card p-3 text-left text-sm hover:bg-accent/50", selected === r.id && "border-primary ring-1 ring-primary")}>
                 <span className="flex items-center gap-2">
                   <span className={cn("h-2 w-2 rounded-full", r.status === "completed" ? "bg-success" : r.status === "failed" ? "bg-destructive" : "bg-warning")} />
                   <span className="font-medium">{titleCase(r.run_type)}</span>

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONType, UTCDateTime, utcnow
@@ -36,6 +36,12 @@ class Application(Base):
     match_reasoning: Mapped[str | None] = mapped_column(Text)
     match_details: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     similarity_score: Mapped[float | None] = mapped_column()
+
+    # Swipe Review: the user's keep / skip decision, and whether a kept job may be submitted
+    # without a second review once its form is filled with every required answer.
+    review_decision: Mapped[str | None] = mapped_column(String(16))
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    auto_submit: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Tailored documents
     tailored_resume_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("resumes.id", ondelete="SET NULL"))

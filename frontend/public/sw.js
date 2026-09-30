@@ -1,6 +1,6 @@
 /* AutoApply AI service worker: offline shell + notification clicks (PWA). */
-const CACHE = "autoapply-shell-v1";
-const SHELL = ["/dashboard", "/icon.svg", "/manifest.webmanifest"];
+const CACHE = "autoapply-shell-v2";
+const SHELL = ["/dashboard", "/icon.svg", "/icon-192.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).catch(() => undefined));
@@ -28,8 +28,8 @@ self.addEventListener("message", (event) => {
   if (data.type === "notify" && self.registration.showNotification) {
     self.registration.showNotification(data.title || "AutoApply AI", {
       body: data.body || "",
-      icon: "/icon.svg",
-      badge: "/icon.svg",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
       data: { link: data.link || "/dashboard" },
     });
   }

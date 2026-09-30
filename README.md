@@ -1,27 +1,43 @@
-# AutoApply AI
+<p align="center">
+  <img src="frontend/public/icon.svg" width="84" alt="AutoApply AI logo" />
+</p>
 
-An autonomous job-application agent that you run yourself. It finds jobs that fit you, tailors your
-resume and writes a cover letter for each one, fills in the application form in a real browser, and
-then **stops and waits for your approval** before anything is submitted. After you apply, it watches
-your Gmail for replies, updates each application's status, puts interviews on your Google Calendar
-with prep notes, and shows you what is working.
+<h1 align="center">AutoApply AI</h1>
 
-> **Nothing is ever submitted without your explicit approval.** The agent fills the form, takes a
-> screenshot and pauses. You review the tailored resume, cover letter and every answer, edit what you
-> like, and click **Approve & submit**. Only then does it re-open the form and submit exactly what
-> you reviewed.
+<p align="center"><b>Swipe right. We apply. Internships on autopilot.</b></p>
 
-| Overview | Review a filled application |
+An autonomous job-application agent that you run yourself, built for mass-applying to internships
+and startup roles. It scans thousands of openings, puts every one that passes your filters into a
+**Swipe Review** deck, and for each job you keep it tailors your resume, writes a cover letter, fills
+in the application form in a real browser and submits it. After you apply, it watches your Gmail for
+replies, updates each application's status, puts interviews on your Google Calendar with prep notes,
+and shows you what is working.
+
+```bash
+./start.sh          # one command: installs what's missing and runs everything → http://localhost:3000
+```
+
+> **Nothing is sent for a job you didn't keep, and eligibility is never guessed.** Scans never skip a
+> job for a low score; you decide in Swipe Review. Keeping a job is your approval to apply. If the
+> form asks something only you can answer (visa sponsorship, work authorization, background checks)
+> and you haven't saved an answer, the filled form stops in **Needs approval** instead. Turn off
+> **Apply automatically** to review every filled form before it's submitted.
+
+| Landing | Swipe Review |
 |---|---|
+| ![Landing](docs/screenshots/landing.png) | ![Swipe Review](docs/screenshots/swipe-review.png) |
+| **Overview** | **Review a filled application** |
 | ![Overview](docs/screenshots/overview.png) | ![Review](docs/screenshots/review.png) |
-| **Approval gate** | **Analytics** |
-| ![Approval](docs/screenshots/approval.png) | ![Analytics](docs/screenshots/analytics.png) |
+| **Mass-apply settings** | **Analytics** |
+| ![Mass apply](docs/screenshots/mass-apply.png) | ![Analytics](docs/screenshots/analytics.png) |
 
 ---
 
 ## Contents
 
+- [One-command start](#one-command-start)
 - [What it does](#what-it-does)
+- [Swipe Review and mass applying](#swipe-review-and-mass-applying)
 - [How it works](#how-it-works)
 - [Quick start (Docker)](#quick-start-docker)
 - [Try the whole loop safely with the demo careers site](#try-the-whole-loop-safely-with-the-demo-careers-site)
@@ -38,6 +54,39 @@ with prep notes, and shows you what is working.
 
 ---
 
+## One-command start
+
+```bash
+git clone https://github.com/saksham-eng560/autoapply-ai.git && cd autoapply-ai
+./start.sh                 # macOS / Linux / WSL — needs Python 3.11+ and Node 20+
+```
+
+The first run creates `.env` with fresh secrets, a Python virtualenv, installs Chromium and the npm
+packages, and prepares a local SQLite database. Later runs start in seconds and only reinstall when
+requirements change. It then runs the API (:8000), the dashboard (:3000) and the task queue, opens
+your browser and streams the logs. **Ctrl-C stops everything.**
+
+| Command | What it does |
+|---|---|
+| `./start.sh` | Local mode, no Docker. Uses Redis + a Celery worker + beat if `redis-server` is installed, otherwise runs tasks in-process with a built-in scheduler (scheduled scans still happen). |
+| `./start.sh --demo` | Also seeds a demo account (`demo@example.com` / `demo-password-123`) with a swipe deck, and serves the demo careers site on :8765. |
+| `./start.sh --prod` | Production build of the dashboard (faster pages). |
+| `./start.sh --docker` | The full Docker Compose stack (PostgreSQL + pgvector, Redis, worker, beat). `./start.sh --stop` stops it. |
+| `./start.sh --reset` | Wipes the local database first. |
+| `start.bat` | Windows: the Docker path (`start.bat stop` to stop). Or use WSL and `./start.sh`. |
+
+Your first ten minutes:
+
+1. **Create your account** at http://localhost:3000/register.
+2. **Upload your resume** in Resume Lab (PDF, DOCX or pasted text) and check the parsed result.
+3. **Settings › Mass apply › Internships**: one click adds the internship lists and startup boards.
+4. **Settings › Saved answers**: save work authorization and visa sponsorship. Without them, kept jobs
+   stop in Needs approval instead of being submitted.
+5. **Scan for jobs now**, then open **Swipe Review** and start swiping.
+
+Add `ANTHROPIC_API_KEY=...` to `.env` for much better scoring, tailoring and answers (everything also
+works without it on built-in heuristics). `make start` does the same as `./start.sh`.
+
 ## What it does
 
 **Discovery.** Scans Greenhouse, Lever, Ashby and Workday boards through their public APIs, reads
@@ -48,11 +97,15 @@ You can also paste any job URL.
 
 **Matching.** Each job gets a 0–100 score across five parts: skills, experience, industry, location
 and compensation. The score also explains which of your skills are strong matches and which the job
-wants that you don't have. Jobs you've excluded (companies to avoid, keywords, seniority, location,
-salary floor) are filtered out before any AI call. Only jobs above your threshold (80 by default) are
-prepared, highest score and freshest first, up to your daily limit.
+wants that you don't have. Only your hard filters remove a job automatically (companies to avoid,
+excluded title keywords, job types, expired deadlines and, optionally, postings that don't sponsor
+visas). Everything else — even a low score — goes to **Swipe Review**, best matches first, with
+heads-ups such as "not a remote role". (The original automatic mode, which skips jobs under a
+threshold and prepares the rest, is still available in Settings.)
 
-**Truthful tailoring.** Your master resume is rewritten for each job: the summary, bullet order,
+**Your resume, your way.** By default the agent sends **your original resume file, unchanged**.
+Switch to *light tweaks* (every word kept, relevant items moved to the top) or *full AI tailoring*
+in Settings › Mass apply. With full tailoring, your master resume is rewritten for each job: the summary, bullet order,
 emphasis and wording (for example, using the job's name for a skill you really have). A guard checks
 the result against your master resume and reverts anything that adds an employer, title, date,
 degree, skill or number that isn't in the original. You get an ATS-friendly PDF (classic or modern
@@ -67,8 +120,10 @@ flagged until you answer it, and the agent remembers your answer for next time. 
 to "decline to self-identify". Browsing uses human-like typing, mouse paths and pacing, and supports
 proxy rotation and CAPTCHA solving (2Captcha / Anti-Captcha). Per-platform rate limits are enforced.
 
-**Approval, then submission.** Every prepared application waits in **Needs approval** with the
-filled-form screenshot, tailored resume, cover letter, answers and match analysis. Submission happens
+**Swipe, then submission.** Keep a job and it's prepared and — with **Apply automatically** on —
+submitted as soon as the form is filled, provided every eligibility question has your saved answer.
+Anything else waits in **Needs approval** with the filled-form screenshot, tailored resume, cover
+letter, answers and match analysis. Submission happens
 in a fresh browser session that re-fills the form with what you approved. The agent checks for a
 confirmation page, saves a screenshot, and records the confirmation number when there is one.
 `SUBMISSION_DRY_RUN=true` disables the final click entirely.
@@ -81,10 +136,18 @@ its status. Messages are filed under `AutoApply AI/…` Gmail labels, and reply 
 covering the company, likely questions, STAR stories drawn from your resume, and questions to ask.
 Reminders go out before each interview.
 
-**Dashboard.** Next.js dashboard with an overview, applications pipeline, job browser, e-mail feed,
-interviews, analytics (response, interview and offer rates, time to response, platform effectiveness,
-keywords that get callbacks), a resume editor, agent logs, and settings. Live updates arrive over
-WebSocket. It has light and dark themes, can be installed as a PWA, and sends browser notifications.
+**Dashboard.** Next.js dashboard with a landing page, an overview, **Swipe Review**, an applications
+pipeline, a job browser, an e-mail feed, interviews, analytics (response, interview and offer rates,
+time to response, platform effectiveness, keywords that get callbacks), a resume editor, agent logs,
+and settings. Live updates arrive over WebSocket. It works on phones, can be installed as a PWA, and
+sends browser notifications.
+
+**Design.** An editorial "ink" theme (charcoal, warm cream type and one signal red) with a "paper"
+light theme: Dela Gothic One display type, Space Grotesk for the interface, hairline grid lines,
+square controls and outlined pill tags. It's built from [shadcn/ui](https://ui.shadcn.com) (Radix)
+components restyled through the design tokens in `frontend/src/app/globals.css`, with framer-motion
+for the swipe deck. The logo, favicon, PWA and extension icons all use the same bracket-and-red-block
+mark (`frontend/public/icon.svg`).
 
 **Notifications.** In-app, e-mail (SMTP or your own Gmail), Discord and Slack. You choose which
 events go to which channel, and there's a weekly summary.
@@ -93,11 +156,47 @@ events go to which channel, and there's a weekly summary.
 OAuth tokens and cookies are encrypted with AES-256-GCM, and closed applications older than the retention period are
 cleaned up automatically.
 
+## Swipe Review and mass applying
+
+**Swipe Review** (`/dashboard/review`) is a deck of every job that passed your filters, best matches
+first. Each card shows the role, company, location, term, salary, visa sponsorship, the score
+breakdown, the skills you have and the ones they want.
+
+- **Drag right** or press **→** to keep: the agent tailors, fills and applies.
+- **Drag left** or press **←** to skip.
+- **Z** undoes the last swipe (until preparation has started).
+- **Keep in bulk**: keep every card at or above a score in one click (with the current filters).
+- Filters: search, internship / full-time, remote only. A counter shows how many are left.
+
+**Presets** (Settings › Mass apply) set everything up in one click and keep your own lists:
+
+| Preset | What it adds |
+|---|---|
+| **Internships** | Intern versions of your target roles, internship-only job types, the SimplifyJobs and vanshb03 internship lists (4,000+ live postings, refreshed daily), ~110 startup Greenhouse / Ashby / Lever boards, 100 applications a day, 300 jobs per source per scan. |
+| **Startups** | The ~110 startup boards, keeping your roles and job types. |
+| **New grad** | Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards. |
+
+Mass-apply settings (all in Settings › Mass apply):
+
+| Preference | Default | Meaning |
+|---|---|---|
+| `resume_strategy` | `original` | Which resume is sent. `original`: your uploaded file, byte for byte (your design and words). `light`: every word kept, only the most relevant bullets, projects and skills moved to the top per job. `full`: AI rewrite, guarded against invented facts. |
+| `review_mode` | `swipe` | `swipe`: nothing is skipped for a low score. `auto`: the original threshold mode. |
+| `auto_submit_kept` | on | Submit kept jobs as soon as the form is filled. Off: every kept job waits for approval. |
+| `trust_generated_answers` | on | The agent's answers to open questions ("Why this company?") don't hold a kept job back. Eligibility questions are never guessed either way. |
+| `auto_keep_min_score` | off | Keep jobs scoring at least this without swiping. |
+| `exclude_no_sponsorship` | off | Skip postings that say they don't sponsor visas or require citizenship. |
+| `max_jobs_per_source` | 50 | How many postings each source may return per scan (10–1000). |
+| `sources.internship_lists` | SimplifyJobs + vanshb03 | Curated lists: `simplify-internships`, `vanshb03-internships`, `simplify-new-grad`, or any `listings.json` URL in the same format. |
+
+Daily and per-platform caps (e.g. 40 Greenhouse, 10 Workday applications a day, with randomized
+cool-downs) still apply to every submission.
+
 ## How it works
 
 ```
                  ┌──────────────────────────── Next.js dashboard (:3000) ─────────────────────────────┐
-  you ──────────▶│ overview · applications · approval · jobs · e-mail · interviews · analytics · ...  │
+  you ──────────▶│ overview · swipe review · applications · jobs · e-mail · interviews · analytics ·… │
                  └──────────────┬───────────────────────────────────────────────▲─────────────────────┘
                    /api/v1/* (same-origin proxy)                                │ WebSocket (live updates)
                  ┌──────────────▼───────────────────────────────────────────────┴─────────────────────┐
@@ -106,15 +205,17 @@ cleaned up automatically.
                         │ PostgreSQL 16 + pgvector │ Redis (queue, rate limits,    │ Local disk / S3 / R2
                         │                          │ pub-sub for live updates)     │ (PDFs, screenshots)
                  ┌──────▼──────────────────────────▼───────────────────────────────▼──────────────────┐
-                 │ Celery worker + beat   scan → match → tailor → fill (Playwright) → ⏸ approval       │
-                 │                        → submit → Gmail monitor → calendar → reminders → analytics │
+                 │ Celery worker + beat   scan → match → ⏸ swipe → tailor → fill (Playwright) → submit │
+                 │                        → Gmail monitor → calendar → reminders → analytics          │
                  └─────────────┬───────────────────────────┬──────────────────────────┬───────────────┘
                    Claude (Anthropic API, structured        Job boards & ATS          Gmail · Calendar
                    outputs; offline heuristics fallback)    (APIs + Chromium)         (Google OAuth)
 ```
 
-The application lifecycle is `discovered → matched → preparing → pending approval → approved → applied
-→ acknowledged → interview → offer / rejected`. Every change is recorded in the application's history.
+The application lifecycle is `discovered → matched (waiting for your swipe) → preparing → approved →
+applied → acknowledged → interview → offer / rejected`, with `pending approval` in between whenever a
+question needs you (or you turned off **Apply automatically**). Every change is recorded in the
+application's history.
 
 **AI.** Claude is the primary model (`ANTHROPIC_MODEL`, default `claude-opus-5-5`), using JSON-schema
 structured outputs, prompt caching and a refusal fallback. OpenAI is an optional secondary provider.
@@ -162,18 +263,21 @@ and real application forms that record submissions locally. Use it to watch the 
 pointing the agent at real employers.
 
 ```bash
-python3 scripts/demo_site.py --host 0.0.0.0     # no dependencies; serves :8765
+./start.sh --demo                               # starts it on :8765 along with everything else
+python3 scripts/demo_site.py --host 0.0.0.0     # or on its own (no dependencies)
 ```
 
 1. In the dashboard, upload your resume in **Resume Lab** (PDF, DOCX or TXT), or paste it as text.
-2. In **Settings → Search preferences**, set a target role such as `Software Engineer` and a threshold
-   such as `50`.
-3. In **Settings → Job sources**, add a careers page and enable **Career pages** under platforms:
+2. In **Settings → Saved answers**, save your work authorization and sponsorship answers.
+3. In **Settings → Preferences**, set a target role such as `Software Engineer`.
+4. In **Settings → Job sources**, add a careers page and enable **Career pages** under platforms:
    - Docker: `http://host.docker.internal:8765/careers`
    - Local (non-Docker) setup: `http://127.0.0.1:8765/careers`
-4. Click **Scan for jobs now**. Matching jobs are tailored, filled in Chromium, and appear under **Needs approval**.
-5. Open one, check the form screenshot, resume, cover letter and answers, then click **Review & approve**.
-6. Open http://localhost:8765/submissions to see exactly what was submitted, including your resume PDF.
+5. Click **Scan for jobs now**. The postings appear in **Swipe Review**.
+6. Keep one (drag right or press →). It's tailored, filled in Chromium and submitted. Turn off
+   **Apply automatically** first if you'd rather check the form screenshot, resume, cover letter and
+   answers and click **Review & approve** yourself.
+7. Open http://localhost:8765/submissions to see exactly what was submitted, including your resume PDF.
 
 ## Using it for real
 
@@ -181,9 +285,9 @@ python3 scripts/demo_site.py --host 0.0.0.0     # no dependencies; serves :8765
    is derived from it, so make it complete and accurate.
 2. **Saved answers** (Settings): fill in work authorization, sponsorship, notice period, salary
    expectation, address, EEO preferences and so on. These answer most form questions directly.
-3. **Search preferences**: target roles and locations, remote preference, salary range, experience
-   levels, job types, companies to target or avoid, excluded keywords, the match threshold and the
-   daily application limit.
+3. **Mass apply** (Settings): apply the **Internships**, **Startups** or **New grad** preset, then check
+   **Preferences**: target roles and locations, remote preference, salary range, job types, companies
+   to target or avoid, excluded keywords and the daily application limit.
 4. **Job sources**: add the companies you care about:
    - Greenhouse board tokens (`stripe` from `job-boards.greenhouse.io/stripe`)
    - Lever slugs (`jobs.lever.co/<company>`)
@@ -196,8 +300,9 @@ python3 scripts/demo_site.py --host 0.0.0.0     # no dependencies; serves :8765
 6. Start with `SUBMISSION_DRY_RUN=true` for a day. You get everything except the final click. Then
    turn it off.
 
-Use **Scan for jobs now**, or let the scheduler scan every `scan_interval_hours`. Prepared
-applications arrive in **Needs approval**, and you get a notification for each one.
+Use **Scan for jobs now**, or let the scheduler scan every `scan_interval_hours`. New jobs land in
+**Swipe Review**; kept jobs are applied to, and anything that needs you arrives in **Needs approval**
+with a notification.
 
 ## Connect Gmail and Google Calendar
 
@@ -244,6 +349,8 @@ encrypted and re-synced every 12 hours and whenever it changes.
 The extension only reads the LinkedIn `li_at` cookie and only sends it to the dashboard URL you entered.
 
 ## Local development without Docker
+
+`./start.sh` does all of the following for you; the individual steps are here if you prefer them.
 
 Requirements: Python 3.11+, Node 20+, PostgreSQL 16 with the `pgvector` extension (or SQLite for a
 quick try), and Redis (optional with `CELERY_TASK_ALWAYS_EAGER=true`).
@@ -365,7 +472,7 @@ Both workflows skip themselves until their variables are set.
 ## Testing and CI
 
 ```bash
-make test           # 74 backend tests on SQLite, incl. a real-Chromium end-to-end test
+make test           # 90 backend tests on SQLite, incl. real-Chromium end-to-end tests (swipe → submit)
 make test-pg        # the same suite on PostgreSQL + pgvector (TEST_DATABASE_URL)
 make e2e            # only the browser end-to-end test
 make lint           # ruff (backend + scripts), ESLint + TypeScript (dashboard)
@@ -394,7 +501,8 @@ backend/
     core/           database, security (JWT, bcrypt, AES-GCM), storage, Redis, WebSocket hub, logging
     models/         SQLAlchemy models (users, resumes, jobs, applications, communications, interviews, runs)
     schemas/        Pydantic request/response and resume-content schemas
-    scrapers/       Greenhouse, Lever, Ashby, Workday, LinkedIn, Indeed, Glassdoor, Wellfound, generic
+    scrapers/       Greenhouse, Lever, Ashby, Workday, LinkedIn, Indeed, Glassdoor, Wellfound, curated
+                    internship lists (SimplifyJobs, vanshb03), generic careers pages
     services/       orchestrator, LLM client, matcher, tailor + truthfulness guard, cover letters, question
                     answerer, resume parser, PDF generator, Gmail, e-mail parser, calendar, notifier,
                     analytics, rate limiter, LinkedIn sync, privacy
@@ -402,10 +510,11 @@ backend/
     worker/         Celery app, beat schedule and tasks
   alembic/          migrations (pgvector, enums, indexes)
   tests/            unit, API, scraper-fixture and browser end-to-end tests
-frontend/           Next.js 14 dashboard (app router, Tailwind, SWR, Recharts, PWA)
+frontend/           Next.js 14 dashboard (app router, Tailwind, shadcn/ui + Radix, framer-motion, SWR, Recharts, PWA)
 extension/          Chrome MV3 extension (LinkedIn session sync)
 prompts/            all LLM prompts as editable text files
-scripts/            demo careers site, migrations, seed data, scraper CLI
+scripts/            demo careers site, migrations, seed data, scraper CLI, local scheduler
+start.sh, start.bat one-command launchers
 docs/screenshots/   dashboard screenshots
 docker-compose.yml, docker-compose.prod.yml, Caddyfile, Makefile, .github/workflows/
 PLAN.md             the full design this implementation follows
@@ -444,15 +553,17 @@ approved**.
     reliable sources.
   - Use browser-based sources sparingly and keep the default rate limits.
   - You are responsible for how you use this tool.
-- **Quality over volume.** A higher match threshold and a lower daily limit get better results than
-  mass-applying.
+- **Volume with care.** Mass applying works best when you keep the jobs you'd genuinely take, keep
+  your saved answers accurate, and stay within the default rate limits.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Dashboard shows "degraded" at `/api/health` | The API isn't reachable from the dashboard. Check `docker compose logs api` and that `BACKEND_URL` points to it. |
-| Nothing gets prepared after a scan | Upload a master resume and check your threshold. The **Jobs** page shows each job's score and why it was skipped, and **Agent Logs** shows each run step by step. |
+| Nothing gets prepared after a scan | In swipe mode nothing is prepared until you keep it: open **Swipe Review**. Upload a master resume first. **All jobs** shows each job's score and why it was skipped, and **Agent Logs** shows each run step by step. |
+| Kept jobs stop in "Needs approval" | A question needs you (usually visa sponsorship or work authorization). Save the answer in **Settings › Saved answers** once and future forms are filled automatically. |
+| `./start.sh` says a port is in use | Something else runs on :3000 or :8000. Stop it, or run `API_PORT=8010 WEB_PORT=3010 ./start.sh`. |
 | "Required answer(s) are empty" at approval | Eligibility questions are never guessed. Answer them once and they're remembered (also editable in **Settings → Saved answers**). |
 | Application fails with a CAPTCHA or bot block | Add a CAPTCHA-solver key and residential proxies to `.env`, or use **Mark as applied** after applying manually through the form link. |
 | LinkedIn session invalid | Log in to LinkedIn in Chrome and click **Sync LinkedIn session** in the extension. |
