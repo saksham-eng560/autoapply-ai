@@ -193,3 +193,25 @@ def create_all() -> None:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == "sqlite":
+        _add_missing_sqlite_columns()
+
+
+def _add_missing_sqlite_columns() -> None:
+    """Local SQLite databases have no Alembic history: add columns introduced by newer versions."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column.type.compile(dialect=engine.dialect)}'
+                if column.server_default is not None:
+                    default = column.server_default.arg
+                    default_sql = default.compile(dialect=engine.dialect) if hasattr(default, "compile") else f"'{default}'"
+                    ddl += f" NOT NULL DEFAULT {default_sql}" if not column.nullable else f" DEFAULT {default_sql}"
+                conn.execute(text(ddl))
+                logger.info("Added column %s.%s", table.name, column.name)

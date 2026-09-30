@@ -37,7 +37,17 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "posted_within_days": 14,
     "scan_enabled": True,
     "scan_interval_hours": 6,
-    "platforms": ["greenhouse", "lever", "ashby", "workday", "linkedin", "generic"],
+    "platforms": ["internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "generic"],
+    # --- Swipe Review / mass apply ---
+    # "swipe": nothing is skipped for a low score; every job that passes your hard filters waits in
+    #          Swipe Review, and the jobs you keep are prepared and applied to.
+    # "auto":  the original behaviour: jobs under auto_apply_threshold are skipped, the rest prepared.
+    "review_mode": "swipe",
+    "auto_submit_kept": True,       # kept jobs are submitted once filled, unless a question needs you
+    "trust_generated_answers": True,  # AI-written open-ended answers don't hold a kept job back
+    "auto_keep_min_score": None,    # optionally keep jobs scoring at least this without swiping
+    "max_jobs_per_source": None,    # None = server default (MAX_JOBS_PER_SOURCE)
+    "exclude_no_sponsorship": False,  # skip listings that say they don't sponsor visas
     "sources": {
         # ATS boards to crawl directly (public APIs, no login needed)
         "greenhouse_boards": [],   # e.g. ["stripe", "airbnb"]
@@ -45,6 +55,8 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
         "ashby_boards": [],        # e.g. ["openai"]
         "workday_sites": [],       # e.g. ["https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"]
         "career_pages": [],        # any careers page URL (JSON-LD / ATS link detection)
+        # Curated internship lists (GitHub-hosted JSON, updated daily); names or raw JSON URLs
+        "internship_lists": ["simplify-internships", "vanshb03-internships"],
     },
     "discord_webhook_url": None,
     "slack_webhook_url": None,

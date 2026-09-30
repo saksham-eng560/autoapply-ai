@@ -116,7 +116,8 @@ def test_full_pipeline(auth_client: TestClient, master_resume: dict, mock_site: 
     base = f"http://127.0.0.1:{mock_site.port}"
     r = c.put("/api/v1/users/me/preferences", json={"preferences": {
         "target_roles": ["Software Engineer"], "target_locations": ["San Francisco"], "auto_apply_threshold": 50,
-        "platforms": ["generic"], "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"]}})
+        "platforms": ["generic"], "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"],
+        "review_mode": "auto"}})
     assert r.status_code == 200
     c.put("/api/v1/users/me/field-mappings", json={"mappings": [
         {"field_name": "work_authorization", "field_value": "Yes"},
@@ -166,3 +167,67 @@ def test_full_pipeline(auth_client: TestClient, master_resume: dict, mock_site: 
     assert history == ["matched", "preparing", "pending_approval", "approved", "applied"]
     overview = c.get("/api/v1/analytics/overview").json()
     assert overview["totals"]["applied"] == 1
+
+
+@pytest.mark.skipif(not _chromium_available(), reason="Chromium not available")
+def test_swipe_keep_then_auto_submit(auth_client: TestClient, master_resume: dict, mock_site: MockSite) -> None:
+    """Swipe Review: a low score never skips the job; keeping it prepares, fills and submits it."""
+    c = auth_client
+    base = f"http://127.0.0.1:{mock_site.port}"
+    r = c.put("/api/v1/users/me/preferences", json={"preferences": {
+        "target_roles": ["Software Engineer"], "auto_apply_threshold": 100, "platforms": ["generic"],
+        "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"], "auto_submit_kept": True}})
+    assert r.status_code == 200 and r.json()["review_mode"] == "swipe"
+    c.put("/api/v1/users/me/field-mappings", json={"mappings": [
+        {"field_name": "work_authorization", "field_value": "Yes"},
+        {"field_name": "requires_sponsorship", "field_value": "No"},
+        {"field_name": "why_company", "field_value": "I love building developer tools."}]})
+
+    with run_inline():
+        r = c.post("/api/v1/agent/start-scan", json={"platforms": ["generic"]})
+    run = c.get(f"/api/v1/agent/runs/{r.json()['id']}").json()
+    assert run["status"] == "completed", run["log"]
+
+    # Threshold 100 would have skipped it in "auto" mode; in swipe mode it waits for you.
+    deck = c.get("/api/v1/review/queue").json()
+    assert deck["stats"]["remaining"] == 1 and len(deck["items"]) == 1
+    card = deck["items"][0]
+    assert card["job"]["company_name"] == "Acme Robotics" and card["match_score"] is not None
+    assert c.get("/api/v1/agent/status").json()["to_review"] == 1
+    assert mock_site.submissions == []
+
+    # Skip, undo, then keep
+    app_id = card["application_id"]
+    assert c.post(f"/api/v1/review/{app_id}", json={"decision": "skip"}).json()["application"]["status"] == "skipped"
+    assert c.get("/api/v1/review/queue").json()["stats"]["remaining"] == 0
+    assert c.post(f"/api/v1/review/{app_id}/undo").status_code == 200
+    assert c.get("/api/v1/review/queue").json()["stats"]["remaining"] == 1
+    with run_inline():
+        r = c.post(f"/api/v1/review/{app_id}", json={"decision": "keep"})
+        assert r.status_code == 200, r.text
+    final = c.get(f"/api/v1/applications/{app_id}").json()
+    history = [h["new_status"] for h in final["history"]]
+    assert final["status"] == "applied", (final["status"], final["error_log"], final["custom_answers"])
+    assert history[-3:] == ["preparing", "approved", "applied"]
+    assert len(mock_site.submissions) == 1 and mock_site.submissions[0]["sponsor"] == "No"
+    assert mock_site.submissions[0]["why"].startswith("I'm interested in Acme Robotics")
+    assert c.get("/api/v1/review/queue").json()["stats"]["kept_total"] == 1
+
+
+@pytest.mark.skipif(not _chromium_available(), reason="Chromium not available")
+def test_swipe_keep_stops_for_eligibility_questions(auth_client: TestClient, master_resume: dict,
+                                                    mock_site: MockSite) -> None:
+    """Without a saved visa answer the kept job is filled but waits for you: eligibility is never guessed."""
+    c = auth_client
+    base = f"http://127.0.0.1:{mock_site.port}"
+    c.put("/api/v1/users/me/preferences", json={"preferences": {
+        "target_roles": ["Software Engineer"], "platforms": ["generic"], "job_types": ["full-time"],
+        "sources": {"career_pages": [f"{base}/careers"]}}})
+    with run_inline():
+        c.post("/api/v1/agent/start-scan", json={"platforms": ["generic"]})
+        app_id = c.get("/api/v1/review/queue").json()["items"][0]["application_id"]
+        assert c.post(f"/api/v1/review/{app_id}", json={"decision": "keep"}).status_code == 200
+    final = c.get(f"/api/v1/applications/{app_id}").json()
+    assert final["status"] == "pending_approval"
+    assert mock_site.submissions == []
+    assert c.post(f"/api/v1/review/{app_id}/undo").status_code == 409  # already prepared

@@ -23,6 +23,7 @@ from app.schemas.user import (
 )
 from app.services.google_oauth import has_scope
 from app.services.llm import get_llm
+from app.services.presets import apply_preset
 from app.services.privacy import delete_user_data, export_user_data
 from app.services.question_answerer import STANDARD_FIELDS
 from app.worker.dispatch import enqueue
@@ -61,8 +62,26 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     max_daily = prefs.get("max_applications_per_day")
     if not isinstance(max_daily, int) or not 1 <= max_daily <= 200:
         raise HTTPException(422, "max_applications_per_day must be 1-200")
+    if prefs.get("review_mode") not in ("swipe", "auto"):
+        raise HTTPException(422, "review_mode must be 'swipe' or 'auto'")
+    auto_keep = prefs.get("auto_keep_min_score")
+    if auto_keep is not None and (not isinstance(auto_keep, int) or not 0 <= auto_keep <= 100):
+        raise HTTPException(422, "auto_keep_min_score must be empty or 0-100")
+    per_source = prefs.get("max_jobs_per_source")
+    if per_source is not None and (not isinstance(per_source, int) or not 10 <= per_source <= 1000):
+        raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
     user.preferences = prefs
     return prefs
+
+
+@router.post("/preferences/preset/{name}")
+def apply_preference_preset(name: str, user: CurrentUser) -> dict:
+    """One click to mass apply: internships, startups or new-grad roles (your own lists are kept)."""
+    try:
+        user.preferences = apply_preset(user.preferences, name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return user.prefs
 
 
 # ------------------------------------------------------------------ field mappings
