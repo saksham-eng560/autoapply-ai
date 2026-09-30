@@ -74,7 +74,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
 async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")  # resume PDFs preview in same-origin iframes
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     return response
 

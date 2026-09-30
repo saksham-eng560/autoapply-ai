@@ -17,7 +17,7 @@ import type { ApplicationStatus } from "@/lib/types";
 const FILTERS: { key: string; label: string; statuses?: string }[] = [
   { key: "all", label: "All active" },
   { key: "pending_approval", label: "Needs approval", statuses: "pending_approval" },
-  { key: "in_progress", label: "In progress", statuses: "matched,preparing,approved" },
+  { key: "in_progress", label: "In progress", statuses: "preparing,approved" },
   { key: "applied", label: "Applied", statuses: "applied,acknowledged" },
   { key: "interviewing", label: "Interviewing", statuses: "screening,interview,assessment,final_round" },
   { key: "offers", label: "Offers", statuses: "offer,accepted" },
@@ -62,7 +62,7 @@ function ApplicationsInner() {
         </Select>
       </div>
       <div className="space-y-3">
-        {isLoading && Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[76px] rounded-xl" />)}
+        {isLoading && Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[76px]" />)}
         {!isLoading && !data?.items.length && (
           <EmptyState icon={Send} title="No applications here" description="Run a scan from the Overview page, or add a job by URL on the Jobs page." />
         )}

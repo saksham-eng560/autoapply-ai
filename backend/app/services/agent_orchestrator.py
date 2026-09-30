@@ -35,6 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.database import checkpoint
 from app.core.storage import get_storage, user_prefix
 from app.models.agent_run import AgentRun
 from app.models.application import Application
@@ -273,6 +274,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         query = SearchQuery.from_preferences(prefs, limit=int(prefs.get("max_jobs_per_source") or settings.MAX_JOBS_PER_SOURCE))
         chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
         run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
+        checkpoint(db)
         scraped = discover_jobs(query, chosen, run)
         new_apps: list[Application] = []
         jobs: list[Job] = []
@@ -290,6 +292,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         run.run.jobs_discovered = len(new_apps)
         run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
         embed_jobs(db, jobs)
+        checkpoint(db)
 
         resume_vec = resume_embedding(db, master) if master else None
         if master is None:
@@ -303,6 +306,8 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
                                      resume_vec=resume_vec)
             except Exception as exc:  # noqa: BLE001
                 run.log(f"Evaluation failed for {app.job.company_name}: {exc}", level="error")
+            if idx % 10 == 9:
+                checkpoint(db)  # cards reach Swipe Review while the rest are still being scored
         matched = [a for a in new_apps if a.status == ApplicationStatus.MATCHED]
         run.run.jobs_matched = len(matched)
         user.last_scan_at = datetime.now(UTC)
@@ -450,6 +455,7 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
         if app.status not in (ApplicationStatus.PREPARING,):
             set_status(db, app, ApplicationStatus.PREPARING, "agent", "Preparing application")
         job = app.job
+        checkpoint(db)
         if enrich_job(db, job):
             run.log("Fetched the full job description from the posting")
         if app.match_score is None:  # e.g. imported before a resume existed; score it for the reviewer
@@ -498,6 +504,7 @@ def prepare_application(db: Session, application_id: str, stage: bool | None = N
                 run.log(f"Could not pre-fetch Greenhouse questions: {exc}", level="warning")
 
         run.run.applications_prepared = 1
+        checkpoint(db)
         should_stage = settings.AUTO_STAGE_APPLICATIONS if stage is None else stage
         if should_stage:
             stage_application(db, str(app.id), run=run)
@@ -687,6 +694,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     app = db.get(Application, uuid.UUID(str(application_id)))
     user = db.get(User, app.user_id)
     result = None
+    checkpoint(db)
     for attempt in (1, 2):  # rule #10: retry once
         result = _run_submitter(db, user, app, submit=False)
         if result.success or result.session_expired:
@@ -769,6 +777,7 @@ def submit_application(db: Session, application_id: str) -> Application:
 
     run = RunLog(db, user, "apply", "user")
     run.log(f"Submitting {app.job.role_title} @ {app.job.company_name} via {platform}")
+    checkpoint(db)
     result = _run_submitter(db, user, app, submit=True)
     if result.screenshot:
         key = _store(user.id, "screenshots", result.screenshot, "png", "image/png")

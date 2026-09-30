@@ -12,7 +12,7 @@ type Setter = (next: ResumeContent) => void;
 
 function Section({ title, children, onAdd }: { title: string; children: React.ReactNode; onAdd?: () => void }) {
   return (
-    <section className="rounded-xl border p-4">
+    <section className="border p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-semibold">{title}</h3>
         {onAdd && <Button type="button" variant="ghost" size="sm" onClick={onAdd}><Plus /> Add</Button>}
@@ -59,7 +59,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
 
       <Section title="Experience" onAdd={() => set("experience", [...value.experience, { company: "", title: "", start_date: "", end_date: "", location: "", bullets: [] }])}>
         {value.experience.map((exp, i) => (
-          <div key={i} className="rounded-lg bg-muted/40 p-3">
+          <div key={i} className="bg-muted/40 p-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Title" value={exp.title} onChange={(v) => updateAt("experience", i, { title: v })} />
               <Field label="Company" value={exp.company} onChange={(v) => updateAt("experience", i, { company: v })} />
@@ -78,7 +78,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
 
       <Section title="Education" onAdd={() => set("education", [...value.education, { institution: "", degree: "", field: "", gpa: "", start_date: "", end_date: "", highlights: [] }])}>
         {value.education.map((edu, i) => (
-          <div key={i} className="rounded-lg bg-muted/40 p-3">
+          <div key={i} className="bg-muted/40 p-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Institution" value={edu.institution} onChange={(v) => updateAt("education", i, { institution: v })} />
               <Field label="Degree" value={edu.degree} onChange={(v) => updateAt("education", i, { degree: v })} />
@@ -94,7 +94,7 @@ export function ResumeEditor({ value, onChange }: { value: ResumeContent; onChan
 
       <Section title="Projects" onAdd={() => set("projects", [...value.projects, { name: "", description: "", technologies: [], url: "" }])}>
         {value.projects.map((p, i) => (
-          <div key={i} className="rounded-lg bg-muted/40 p-3">
+          <div key={i} className="bg-muted/40 p-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Name" value={p.name} onChange={(v) => updateAt("projects", i, { name: v })} />
               <Field label="URL" value={p.url} onChange={(v) => updateAt("projects", i, { url: v })} />

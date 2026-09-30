@@ -109,7 +109,8 @@ class Base(DeclarativeBase):
 # --------------------------------------------------------------------------- engine
 def _build_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
-        kwargs: dict[str, Any] = {"connect_args": {"check_same_thread": False}}
+        # Background tasks and API requests share the file: wait for the writer instead of failing fast.
+        kwargs: dict[str, Any] = {"connect_args": {"check_same_thread": False, "timeout": 30}}
         if url in ("sqlite://", "sqlite:///:memory:"):
             kwargs["poolclass"] = StaticPool
         eng = create_engine(url, **kwargs)
@@ -118,6 +119,9 @@ def _build_engine(url: str) -> Engine:
         def _sqlite_pragmas(dbapi_conn: Any, _: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            if url not in ("sqlite://", "sqlite:///:memory:"):
+                cursor.execute("PRAGMA journal_mode=WAL")  # readers never block on the writer
+                cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.close()
 
         return eng
@@ -153,6 +157,16 @@ def get_db() -> Iterator[Session]:
         raise
     finally:
         db.close()
+
+
+def checkpoint(db: Session) -> None:
+    """Commit progress before a long network / browser step so the write lock isn't held throughout.
+
+    With SQLite (local mode) one open write transaction blocks every other writer, e.g. your swipes
+    while a scan runs. With PostgreSQL it simply makes progress visible to the dashboard sooner.
+    """
+    if db.in_transaction():
+        db.commit()
 
 
 @contextmanager

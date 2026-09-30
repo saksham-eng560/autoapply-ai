@@ -9,7 +9,7 @@ import { TagInput } from "@/components/tag-input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog } from "@/components/ui/dialog";
+import { Modal } from "@/components/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -21,13 +21,112 @@ import { ApiError, api, del, fetcher, patch, post, put } from "@/lib/api-client"
 import type { FieldMapping, Preferences, StandardField } from "@/lib/types";
 import { PLATFORM_LABELS, cn, timeAgo } from "@/lib/utils";
 
-const ALL_PLATFORMS = ["greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
+const ALL_PLATFORMS = ["internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
+const pill = (on: boolean) => cn("rounded-full border px-3 py-1 text-sm transition-colors", on ? "border-primary bg-primary text-primary-foreground" : "border-foreground/30 hover:border-foreground");
+
+const PRESETS = [
+  { name: "internships", title: "Internships", text: "Intern roles, 4,000+ curated listings (SimplifyJobs, vanshb03) plus 110 startup boards, 100 applications/day." },
+  { name: "startups", title: "Startups", text: "Adds 110 startup Greenhouse, Ashby and Lever boards to your sources, keeps your roles and job types." },
+  { name: "new-grad", title: "New grad", text: "Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards." },
+] as const;
+
+function MassApplyPanel() {
+  const { data: me, mutate } = useMe();
+  const toast = useToast();
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [applying, setApplying] = useState<string | null>(null);
+  const { saving, run } = useSaver();
+  useEffect(() => { if (me) setPrefs(me.preferences); }, [me]);
+  if (!prefs) return null;
+  const set = <K extends keyof Preferences>(k: K, v: Preferences[K]) => setPrefs({ ...prefs, [k]: v });
+  const save = () => run(async () => {
+    await put("/users/me/preferences", { preferences: {
+      review_mode: prefs.review_mode, auto_submit_kept: prefs.auto_submit_kept, trust_generated_answers: prefs.trust_generated_answers,
+      auto_keep_min_score: prefs.auto_keep_min_score, max_jobs_per_source: prefs.max_jobs_per_source,
+      exclude_no_sponsorship: prefs.exclude_no_sponsorship, max_applications_per_day: prefs.max_applications_per_day,
+      sources: { internship_lists: prefs.sources.internship_lists || [] },
+    } });
+    await mutate();
+  });
+  const applyPreset = async (name: string) => {
+    setApplying(name);
+    try {
+      await post(`/users/me/preferences/preset/${name}`);
+      await mutate();
+      toast({ title: "Preset applied", description: "Your roles, sources and limits are set for mass applying. Run a scan to fill your deck.", tone: "success" });
+    } catch (err) {
+      toast({ title: "Could not apply preset", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+    } finally {
+      setApplying(null);
+    }
+  };
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>One-click presets</CardTitle>
+          <CardDescription>Presets extend your settings — your own roles, boards and exclusions are kept.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-px border-t bg-border p-0 md:grid-cols-3">
+          {PRESETS.map((p) => (
+            <div key={p.name} className="flex flex-col bg-card p-5">
+              <p className="display text-xl">{p.title}</p>
+              <p className="mt-2 flex-1 text-sm text-muted-foreground">{p.text}</p>
+              <Button className="mt-4 self-start" size="sm" loading={applying === p.name} onClick={() => applyPreset(p.name)}>Apply preset</Button>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>How jobs are picked</CardTitle>
+          <CardDescription>Swipe mode never skips a job for a low score — you decide in Swipe Review.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Row label="Review mode" hint="Auto mode skips jobs under your match threshold and prepares the rest for approval.">
+            <div className="flex flex-wrap gap-2">
+              {(["swipe", "auto"] as const).map((m) => (
+                <button key={m} type="button" className={pill(prefs.review_mode === m)} onClick={() => set("review_mode", m)}>
+                  {m === "swipe" ? "Swipe Review (recommended)" : "Automatic threshold"}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row label="Apply automatically after I keep" hint="Kept jobs are submitted as soon as the form is filled. Blank eligibility questions always wait for you.">
+            <Switch checked={prefs.auto_submit_kept} onCheckedChange={(v) => set("auto_submit_kept", v)} label="Apply automatically after keeping" />
+          </Row>
+          <Row label="Trust AI answers to open questions" hint="“Why this company?”-style answers written by the agent won't hold a kept job back. Visa, work authorization and background questions are never guessed.">
+            <Switch checked={prefs.trust_generated_answers} onCheckedChange={(v) => set("trust_generated_answers", v)} label="Trust generated answers" />
+          </Row>
+          <Row label="Keep automatically at score" hint="Optional: jobs scoring at least this are kept without a swipe. Leave empty to swipe everything yourself.">
+            <Input type="number" min={0} max={100} className="max-w-[8rem]" placeholder="off" value={prefs.auto_keep_min_score ?? ""}
+              onChange={(e) => set("auto_keep_min_score", e.target.value === "" ? null : Number(e.target.value))} />
+          </Row>
+          <Row label="Skip jobs without visa sponsorship" hint="For international students: drop postings that say they don't sponsor or require citizenship.">
+            <Switch checked={prefs.exclude_no_sponsorship} onCheckedChange={(v) => set("exclude_no_sponsorship", v)} label="Skip jobs without sponsorship" />
+          </Row>
+          <Row label="Max applications per day" hint="Per-platform caps (e.g. 40 Greenhouse, 10 Workday) still apply to stay under the radar.">
+            <Input type="number" min={1} max={200} className="max-w-[8rem]" value={prefs.max_applications_per_day} onChange={(e) => set("max_applications_per_day", Number(e.target.value))} />
+          </Row>
+          <Row label="Jobs per source per scan" hint="How many postings each source may return per scan (10–1000).">
+            <Input type="number" min={10} max={1000} className="max-w-[8rem]" placeholder="50" value={prefs.max_jobs_per_source ?? ""}
+              onChange={(e) => set("max_jobs_per_source", e.target.value === "" ? null : Number(e.target.value))} />
+          </Row>
+          <Row label="Curated internship lists" hint="simplify-internships, vanshb03-internships, simplify-new-grad — or any listings.json URL in the same format.">
+            <TagInput value={prefs.sources.internship_lists || []} onChange={(v) => setPrefs({ ...prefs, sources: { ...prefs.sources, internship_lists: v } })} placeholder="simplify-internships" />
+          </Row>
+          <div className="pt-4"><Button onClick={save} loading={saving}><Save /> Save mass-apply settings</Button></div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-2 border-b py-4 last:border-0 md:grid-cols-[16rem_1fr] md:gap-6">
+    <div className="grid gap-2 border-b border-border/70 py-5 last:border-0 md:grid-cols-[18rem_1fr] md:gap-8">
       <div>
-        <Label>{label}</Label>
+        <Label className="text-sm font-semibold">{label}</Label>
         {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
       </div>
       <div>{children}</div>
@@ -76,8 +175,8 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
             <div className="flex flex-wrap gap-2">
               {ALL_PLATFORMS.map((p) => (
                 <button key={p} type="button" onClick={() => set("platforms", prefs.platforms.includes(p) ? prefs.platforms.filter((x) => x !== p) : [...prefs.platforms, p])}
-                  className={cn("rounded-full border px-3 py-1 text-sm", prefs.platforms.includes(p) ? "border-primary bg-primary/10 text-primary" : "hover:bg-accent")}>
-                  {PLATFORM_LABELS[p]}
+                  className={pill(prefs.platforms.includes(p))}>
+                  {PLATFORM_LABELS[p] || p}
                 </button>
               ))}
             </div>
@@ -125,7 +224,7 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
           <div className="flex flex-wrap gap-2">
             {["full-time", "part-time", "internship", "contract", "freelance"].map((t) => (
               <button key={t} type="button" onClick={() => set("job_types", prefs.job_types.includes(t) ? prefs.job_types.filter((x) => x !== t) : [...prefs.job_types, t])}
-                className={cn("rounded-full border px-3 py-1 text-sm capitalize", prefs.job_types.includes(t) ? "border-primary bg-primary/10 text-primary" : "hover:bg-accent")}>{t}</button>
+                className={cn(pill(prefs.job_types.includes(t)), "capitalize")}>{t}</button>
             ))}
           </div>
         </Row>
@@ -146,7 +245,7 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
         <Row label="Exclude titles containing">
           <TagInput value={prefs.keywords_exclude} onChange={(v) => set("keywords_exclude", v)} placeholder="Principal, Manager…" />
         </Row>
-        <Row label="Match threshold" hint="Only jobs scoring at or above this are prepared for you.">
+        <Row label="Match threshold" hint="Automatic mode only: jobs scoring at or above this are prepared for you. Swipe mode never skips on score.">
           <div className="flex max-w-md items-center gap-4">
             <input type="range" min={0} max={100} value={prefs.auto_apply_threshold} onChange={(e) => set("auto_apply_threshold", Number(e.target.value))} className="flex-1 accent-[hsl(var(--primary))]" />
             <span className="w-10 text-right font-medium tabular-nums">{prefs.auto_apply_threshold}</span>
@@ -335,7 +434,7 @@ function IntegrationsPanel() {
             )}
           </div>
           {token && (
-            <div className="space-y-2 rounded-lg bg-muted p-3">
+            <div className="space-y-2 bg-muted p-3">
               <p className="text-xs text-muted-foreground">Dashboard URL: <code>{window.location.origin}</code></p>
               <div className="flex gap-2">
                 <Input readOnly value={token.token} className="font-mono text-xs" />
@@ -410,11 +509,11 @@ function PrivacyPanel() {
         <CardHeader><CardTitle className="text-destructive">Delete my account</CardTitle><CardDescription>Permanently deletes your resumes (database and file storage), applications, e-mails, interviews, OAuth tokens and account. This cannot be undone.</CardDescription></CardHeader>
         <CardContent><Button variant="destructive" onClick={() => setOpen(true)}><Trash2 /> Delete everything</Button></CardContent>
       </Card>
-      <Dialog open={open} onOpenChange={setOpen} title="Delete your account?" description="Type DELETE to confirm."
+      <Modal open={open} onOpenChange={setOpen} title="Delete your account?" description="Type DELETE to confirm."
         footer={<Button variant="destructive" disabled={confirmText !== "DELETE"} loading={saving}
           onClick={() => run(async () => { await del("/users/me", { confirm: "DELETE" }); router.replace("/"); }, "Account deleted")}>Delete permanently</Button>}>
         <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE" />
-      </Dialog>
+      </Modal>
     </div>
   );
 }
@@ -422,15 +521,16 @@ function PrivacyPanel() {
 function SettingsInner() {
   const params = useSearchParams();
   const router = useRouter();
-  const tab = params.get("tab") || "preferences";
+  const tab = params.get("tab") || "mass-apply";
   useEffect(() => {
     if (params.get("google") === "connected") router.replace("/dashboard/settings?tab=integrations");
   }, [params, router]);
   return (
     <div>
-      <PageHeader title="Settings" description="Tell the agent what you want, where to look, and how to answer." />
+      <PageHeader eyebrow="Setup" title="Settings" description="Tell the agent what you want, where to look, and how to answer." />
       <Tabs value={tab} onValueChange={(v) => router.replace(`/dashboard/settings?tab=${v}`)}>
         <TabsList className="flex-wrap">
+          <TabsTrigger value="mass-apply">Mass apply</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
           <TabsTrigger value="sources">Job sources</TabsTrigger>
           <TabsTrigger value="answers">Saved answers</TabsTrigger>
@@ -438,6 +538,7 @@ function SettingsInner() {
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="privacy">Privacy</TabsTrigger>
         </TabsList>
+        <TabsContent value="mass-apply"><MassApplyPanel /></TabsContent>
         <TabsContent value="preferences"><PreferencesForm /></TabsContent>
         <TabsContent value="sources"><PreferencesForm sourcesOnly /></TabsContent>
         <TabsContent value="answers"><FieldMappingsForm /></TabsContent>

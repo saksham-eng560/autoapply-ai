@@ -128,6 +128,7 @@ def test_review_queue_decisions(auth_client: TestClient, master_resume: dict, mo
     assert deck["stats"]["remaining"] == 4 and deck["settings"]["auto_submit_kept"] is True
     assert deck["items"][0]["heads_up"] == ["Not a remote role"] and deck["has_master_resume"]
     assert auth_client.get("/api/v1/review/queue?min_score=60").json()["stats"]["remaining"] == 4
+    assert auth_client.get("/api/v1/review/queue?min_score=60").json()["matching"] == 2
     assert len(auth_client.get("/api/v1/review/queue?min_score=60").json()["items"]) == 2
     assert len(auth_client.get("/api/v1/review/queue?remote=true").json()["items"]) == 2
 

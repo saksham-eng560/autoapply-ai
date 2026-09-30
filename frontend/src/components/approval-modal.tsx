@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Modal } from "@/components/modal";
 import type { ApplicationDetail, CustomAnswer } from "@/lib/types";
 
 export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, coverLetter }: {
@@ -39,12 +39,12 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
   ];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Approve & submit application"
+    <Modal open={open} onOpenChange={onOpenChange} title="Approve & submit application"
       description={`${app.job?.role_title} at ${app.job?.company_name}`}
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="success" onClick={approve} disabled={!confirmed || emptyRequired.length > 0} loading={loading}><ShieldCheck /> Approve & submit</Button>
+          <Button onClick={approve} disabled={!confirmed || emptyRequired.length > 0} loading={loading}><ShieldCheck /> Approve & submit</Button>
         </>
       }>
       <ul className="space-y-2">
@@ -61,7 +61,7 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
         </ul>
       )}
       {app.needs_manual_review && app.manual_review_reason && (
-        <p className="mt-4 rounded-md bg-warning/10 p-3 text-sm text-warning-foreground dark:text-warning">{app.manual_review_reason}</p>
+        <p className="mt-4 bg-warning/10 p-3 text-sm text-warning">{app.manual_review_reason}</p>
       )}
       <p className="mt-4 text-sm text-muted-foreground">
         The agent will re-open the application form, fill it with exactly what you reviewed (including your edits), and click submit.
@@ -71,6 +71,6 @@ export function ApprovalModal({ app, open, onOpenChange, onApprove, answers, cov
         <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[hsl(var(--primary))]" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
         I reviewed the resume, cover letter and answers, and everything is accurate.
       </label>
-    </Dialog>
+    </Modal>
   );
 }

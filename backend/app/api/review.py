@@ -117,12 +117,15 @@ def queue(
     remote: bool | None = None,
     q: str | None = None,
 ) -> dict:
-    query = _queue_query(user, min_score, job_type, remote, q).order_by(
-        Application.match_score.desc().nulls_last(), Job.posted_date.desc().nulls_last(), Job.discovered_at.desc())
+    filtered = _queue_query(user, min_score, job_type, remote, q)
+    query = filtered.order_by(
+        Application.match_score.desc().nulls_last(), Job.posted_date.desc().nulls_last(), Job.discovered_at.desc(),
+        Application.id)  # stable order: refetches must not reshuffle the deck
     apps = db.scalars(query.limit(limit)).all()
     prefs = user.prefs
     return {
         "items": [_card(a) for a in apps],
+        "matching": db.scalar(select(func.count()).select_from(filtered.subquery())) or 0,
         "stats": _stats(db, user),
         "settings": {"auto_submit_kept": bool(prefs.get("auto_submit_kept", True)),
                      "review_mode": prefs.get("review_mode") or "swipe"},

@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Modal } from "@/components/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -42,7 +42,7 @@ function JobDialog({ jobId, onClose, onChanged }: { jobId: string | null; onClos
     }
   };
   return (
-    <Dialog open={!!jobId} onOpenChange={(o) => !o && onClose()} className="max-w-3xl"
+    <Modal open={!!jobId} onOpenChange={(o) => !o && onClose()} className="max-w-3xl"
       title={job ? job.role_title : "Loading…"}
       description={job ? `${job.company_name}${job.location ? ` · ${job.location}` : ""}` : undefined}
       footer={job && (
@@ -58,7 +58,7 @@ function JobDialog({ jobId, onClose, onChanged }: { jobId: string | null; onClos
       )}>
       {!job ? <Skeleton className="h-64" /> : (
         <div className="space-y-4">
-          <div className="flex items-start gap-4 rounded-lg bg-muted/50 p-3">
+          <div className="flex items-start gap-4 bg-muted/50 p-3">
             <JobMatchBadge score={job.application?.match_score} />
             <div className="text-sm">
               {job.application && <StatusBadge status={job.application.status} />}
@@ -71,7 +71,7 @@ function JobDialog({ jobId, onClose, onChanged }: { jobId: string | null; onClos
           <div className="prose-pre text-muted-foreground">{job.description}</div>
         </div>
       )}
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -95,7 +95,7 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
     }
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Add a job by URL"
+    <Modal open={open} onOpenChange={onOpenChange} title="Add a job by URL"
       description="Paste any Greenhouse, Lever, Ashby, Workday, LinkedIn or company careers-page link."
       footer={<><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} loading={loading} disabled={!url.startsWith("http")}>Import job</Button></>}>
       <div className="space-y-4">
@@ -108,7 +108,7 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
           Tailor resume, write cover letter and fill the form right away (you still approve before submission)
         </label>
       </div>
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -162,7 +162,7 @@ export default function JobsPage() {
         </Select>
       </div>
 
-      <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="overflow-hidden border bg-card">
         {isLoading && <div className="space-y-2 p-4">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-14" />)}</div>}
         {!isLoading && !data?.items.length && (
           <div className="p-6"><EmptyState icon={Briefcase} title="No jobs yet" description="Configure your job sources in Settings, then run a scan from the Overview page — or add a job by URL."

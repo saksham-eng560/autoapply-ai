@@ -122,7 +122,7 @@ export default function ApplicationDetailPage() {
               <Button variant="outline" onClick={() => run("skip", () => post(`/applications/${app.id}/skip`), "Skipped")} loading={busy === "skip"}>
                 <XCircle /> Skip
               </Button>
-              <Button variant="success" onClick={() => setApproveOpen(true)}><ShieldCheck /> Review & approve</Button>
+              <Button onClick={() => setApproveOpen(true)}><ShieldCheck /> Review & approve</Button>
             </>
           )}
           {!reviewable && !["approved", "preparing"].includes(app.status) && (
@@ -135,19 +135,19 @@ export default function ApplicationDetailPage() {
       </div>
 
       {app.status === "preparing" && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+        <div className="mb-4 flex items-center gap-3 border border-primary/30 bg-primary/5 p-3 text-sm">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           The agent is tailoring your resume, writing the cover letter and filling out the form…
         </div>
       )}
       {app.status === "approved" && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+        <div className="mb-4 flex items-center gap-3 border border-primary/30 bg-primary/5 p-3 text-sm">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           Approved — submitting now. {app.notes}
         </div>
       )}
       {app.needs_manual_review && app.manual_review_reason && reviewable && (
-        <div className="mb-4 flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm">
+        <div className="mb-4 flex items-start gap-3 border border-warning/50 bg-warning/10 p-3 text-sm">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
           <div className="flex-1">
             <p className="font-medium">Needs your attention</p>
@@ -164,7 +164,7 @@ export default function ApplicationDetailPage() {
         </div>
       )}
       {app.status === "applied" && app.confirmation_number && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 p-3 text-sm">
+        <div className="mb-4 flex items-center gap-2 border border-success/40 bg-success/10 p-3 text-sm">
           <CheckCircle2 className="h-4 w-4 text-success" /> Submitted {formatDateTime(app.submitted_at)} · confirmation #{app.confirmation_number}
         </div>
       )}
@@ -193,14 +193,14 @@ export default function ApplicationDetailPage() {
                 {app.form_screenshot_url ? (
                   <a href={app.form_screenshot_url} target="_blank" rel="noreferrer">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={app.form_screenshot_url} alt="Filled application form" className="max-h-[640px] w-full rounded-lg border object-contain object-top" />
+                    <img src={app.form_screenshot_url} alt="Filled application form" className="max-h-[640px] w-full border object-contain object-top" />
                   </a>
                 ) : <p className="text-sm text-muted-foreground">No screenshot available.</p>}
                 {app.confirmation_screenshot_url && (
                   <div className="mt-4">
                     <p className="mb-2 text-sm font-medium">Confirmation page</p>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={app.confirmation_screenshot_url} alt="Submission confirmation" className="max-h-80 w-full rounded-lg border object-contain object-top" />
+                    <img src={app.confirmation_screenshot_url} alt="Submission confirmation" className="max-h-80 w-full border object-contain object-top" />
                   </div>
                 )}
               </CardContent>
@@ -216,7 +216,7 @@ export default function ApplicationDetailPage() {
               <CardContent className="max-h-[640px] space-y-1 overflow-y-auto scrollbar-thin">
                 {!app.form_fields.length && <p className="text-sm text-muted-foreground">No field report yet.</p>}
                 {app.form_fields.map((f, i) => (
-                  <div key={`${f.label}-${i}`} className="flex items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                  <div key={`${f.label}-${i}`} className="flex items-start gap-2 px-2 py-1.5 text-sm hover:bg-accent">
                     {f.status === "filled" ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" /> :
                       f.status === "unmapped" ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /> :
                         <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40" />}
@@ -245,7 +245,7 @@ export default function ApplicationDetailPage() {
               </CardHeader>
               <CardContent>
                 {app.tailored_resume_pdf_url ? (
-                  <iframe src={app.tailored_resume_pdf_url} title="Tailored resume" className="h-[720px] w-full rounded-lg border" />
+                  <iframe src={app.tailored_resume_pdf_url} title="Tailored resume" className="h-[720px] w-full border" />
                 ) : <p className="text-sm text-muted-foreground">Not generated yet.</p>}
               </CardContent>
             </Card>
@@ -259,7 +259,7 @@ export default function ApplicationDetailPage() {
                   <p key={c} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />{c}</p>
                 ))}
                 {!!app.tailored_resume?.changes_made.some((c) => c.startsWith("[guard]")) && (
-                  <div className="mt-4 rounded-md border border-primary/20 bg-primary/5 p-3">
+                  <div className="mt-4 border border-primary/20 bg-primary/5 p-3">
                     <p className="mb-1 flex items-center gap-1.5 font-medium"><ShieldCheck className="h-4 w-4 text-primary" /> Truthfulness guard</p>
                     <p className="mb-2 text-xs text-muted-foreground">Claims that couldn&apos;t be verified against your master resume were removed:</p>
                     {app.tailored_resume.changes_made.filter((c) => c.startsWith("[guard]")).map((c) => (
@@ -295,7 +295,7 @@ export default function ApplicationDetailPage() {
             <CardContent className="space-y-4">
               {!answers.length && <p className="text-sm text-muted-foreground">This form had no custom questions.</p>}
               {answers.map((a, i) => (
-                <div key={`${a.question}-${i}`} className={cn("rounded-lg border p-3", a.needs_user_review && "border-warning/60 bg-warning/5")}>
+                <div key={`${a.question}-${i}`} className={cn("border p-3", a.needs_user_review && "border-warning/60 bg-warning/5")}>
                   <div className="mb-2 flex items-start justify-between gap-2">
                     <p className="text-sm font-medium">{a.question}{a.required && <span className="text-destructive"> *</span>}</p>
                     <div className="flex shrink-0 gap-1">
@@ -387,13 +387,13 @@ export default function ApplicationDetailPage() {
               <CardContent className="space-y-3 text-sm">
                 {!app.communications.length && !app.interviews.length && <p className="text-muted-foreground">No recruiter contact yet.</p>}
                 {app.interviews.map((i) => (
-                  <Link key={i.id} href={`/dashboard/interviews?id=${i.id}`} className="block rounded-md border p-3 hover:bg-accent">
+                  <Link key={i.id} href={`/dashboard/interviews?id=${i.id}`} className="block border p-3 hover:bg-accent">
                     <p className="font-medium">{titleCase(i.interview_type || "interview")} · {formatDateTime(i.scheduled_at)}</p>
                     <p className="text-xs text-muted-foreground">{i.meeting_link || i.physical_location}</p>
                   </Link>
                 ))}
                 {app.communications.map((c) => (
-                  <Link key={c.id} href={`/dashboard/emails?id=${c.id}`} className="block rounded-md border p-3 hover:bg-accent">
+                  <Link key={c.id} href={`/dashboard/emails?id=${c.id}`} className="block border p-3 hover:bg-accent">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate font-medium">{c.subject}</p>
                       {c.detected_intent && <Badge tone="info">{titleCase(c.detected_intent)}</Badge>}
@@ -402,7 +402,7 @@ export default function ApplicationDetailPage() {
                   </Link>
                 ))}
                 {app.error_log && (
-                  <div className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">
+                  <div className="bg-destructive/10 p-3 text-xs text-destructive">
                     <p className="mb-1 flex items-center gap-1 font-medium"><FileText className="h-3.5 w-3.5" /> Last error</p>
                     {app.error_log}
                   </div>

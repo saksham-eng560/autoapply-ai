@@ -2,19 +2,20 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+/** Outlined pills, like the tag chips of the landing page. */
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors",
+  "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium leading-5 transition-colors",
   {
     variants: {
       tone: {
-        default: "border-transparent bg-secondary text-secondary-foreground",
-        primary: "border-transparent bg-primary/10 text-primary",
-        info: "border-transparent bg-sky-500/10 text-sky-700 dark:text-sky-300",
-        success: "border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-        warning: "border-transparent bg-amber-500/15 text-amber-800 dark:text-amber-300",
-        danger: "border-transparent bg-red-500/10 text-red-700 dark:text-red-300",
-        muted: "border-transparent bg-muted text-muted-foreground",
-        outline: "text-foreground",
+        default: "border-foreground/30 text-foreground",
+        primary: "border-primary bg-primary text-primary-foreground",
+        info: "border-info/60 text-info",
+        success: "border-success/60 text-success",
+        warning: "border-warning/70 text-warning",
+        danger: "border-primary/70 text-primary",
+        muted: "border-border text-muted-foreground",
+        outline: "border-foreground/60 text-foreground",
       },
     },
     defaultVariants: { tone: "default" },
@@ -26,3 +27,5 @@ export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, Varia
 export function Badge({ className, tone, ...props }: BadgeProps) {
   return <span className={cn(badgeVariants({ tone }), className)} {...props} />;
 }
+
+export { badgeVariants };
