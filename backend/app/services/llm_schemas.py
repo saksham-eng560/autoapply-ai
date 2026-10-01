@@ -122,3 +122,5 @@ LINKEDIN_DIFF_SCHEMA = obj(
     changes=arr(obj(section=STR, change=STR, linkedin_value=STR)),
     summary=STR,
 )
+
+CONNECTION_TEST_SCHEMA = obj(ok=BOOL, reply=STR)

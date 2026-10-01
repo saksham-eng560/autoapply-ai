@@ -6,8 +6,8 @@ import { useEffect, useState } from "react";
 import { useSWRConfig } from "swr";
 import { LayoutGroup, motion } from "framer-motion";
 import {
-  BarChart3, Briefcase, CalendarDays, CheckCheck, FileText, Inbox, Layers, LayoutDashboard, LogOut, Menu, ScrollText, Send,
-  Settings, type LucideIcon,
+  BarChart3, Briefcase, CalendarDays, CheckCheck, FileText, Inbox, Layers, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText,
+  Send, Settings, type LucideIcon,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
 import { NotificationBell } from "@/components/notification-bell";
@@ -36,7 +36,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/dashboard/review", label: "Swipe Review", icon: Layers, badge: "review" },
-      { href: "/dashboard/applications", label: "Applications", icon: Send, badge: "pending" },
+      { href: "/dashboard/submit", label: "Ready to submit", icon: ListChecks, badge: "pending" },
+      { href: "/dashboard/applications", label: "Applications", icon: Send },
       { href: "/dashboard/applied", label: "I Applied", icon: CheckCheck },
       { href: "/dashboard/jobs", label: "All jobs", icon: Briefcase },
     ],

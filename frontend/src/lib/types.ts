@@ -44,6 +44,12 @@ export interface Preferences {
   auto_keep_min_score: number | null;
   max_jobs_per_source: number | null;
   exclude_no_sponsorship: boolean;
+  /** Opt-in Internshala apply bot (uses your Internshala login synced by the extension). */
+  internshala_bot_enabled?: boolean;
+  /** Send Internshala applications without your click (off: they wait in your review queue). */
+  internshala_auto_submit?: boolean;
+  /** At most this many Internshala applications a day (1–25). */
+  internshala_daily_limit?: number;
   discord_webhook_url: string | null;
   slack_webhook_url: string | null;
   timezone: string;
@@ -236,6 +242,8 @@ export interface ApplicationDetail extends ApplicationSummary {
   similarity_score: number | null;
   cover_letter: string | null;
   custom_answers: CustomAnswer[];
+  /** Your corrections from "Ready to submit": profile key ("email") or "label:<form label>" -> value. */
+  field_overrides?: Record<string, string>;
   form_fields: FormFieldReport[];
   tailored_resume: Resume | null;
   tailored_resume_pdf_url: string | null;
@@ -252,6 +260,51 @@ export interface ApplicationDetail extends ApplicationSummary {
   history: HistoryEntry[];
   communications: Communication[];
   interviews: Interview[];
+}
+
+/** One prefilled item on the "Ready to submit" sheet. */
+export interface ReviewRow {
+  /** Profile key ("email"), "label:<form label>" for questions, "cover_letter", "resume" or "file:<label>". */
+  key: string;
+  label: string;
+  kind: "profile" | "question" | "cover_letter" | "resume" | "file";
+  value: string;
+  /** The form control: text, textarea, select, radio, checkbox, email, tel, number, file... */
+  type: string;
+  options: string[];
+  required: boolean;
+  /** The agent filled this in on the staged form. */
+  filled: boolean;
+  /** Low confidence, flagged for review, or a required field the agent couldn't fill. */
+  flagged: boolean;
+  source: string;
+  confidence: number | null;
+  /** Why it's flagged, in plain words. */
+  note: string | null;
+  /** The resume PDF, for the resume row. */
+  url: string | null;
+}
+
+export interface SubmitQueueItem extends ApplicationSummary {
+  form_screenshot_url: string | null;
+  tailored_resume_pdf_url: string | null;
+  staged_at: string | null;
+  /** Why the agent can't submit this one itself (e.g. an Internshala login): apply there, then "I Applied". */
+  blocker: string | null;
+  apply_url: string | null;
+  /** Rows needing your attention first, then the rest in form order. */
+  rows: ReviewRow[];
+  attention: number;
+}
+
+export interface SubmitQueue {
+  items: SubmitQueueItem[];
+  total: number;
+}
+
+export interface DirectSubmitResponse extends ApplicationDetail {
+  /** The next application waiting in the queue, or null when it was the last one. */
+  next_id: string | null;
 }
 
 export interface AgentRun {
@@ -369,10 +422,55 @@ export interface NotificationItem {
 export interface Integrations {
   google: { configured: boolean; connected: boolean; email: string | null; gmail: boolean; calendar: boolean; last_polled_at: string | null; push_enabled: boolean };
   linkedin: { connected: boolean; session_valid: boolean; updated_at: string | null; profile_diff: { has_changes: boolean; changes: { section: string; change: string; linkedin_value: string }[]; summary: string } | null; synced_at: string | null };
-  llm: { providers: string[]; model: string | null; embedding_provider: string };
+  /** The synced Internshala login (never the cookies themselves) and the bot's switches. */
+  internshala: { connected: boolean; session_valid: boolean; updated_at: string | null; bot_enabled: boolean; auto_submit: boolean; daily_limit: number };
+  llm: {
+    /** Provider tried first (null = built-in heuristics only); the rest are fallbacks. */
+    provider: string | null;
+    providers: string[];
+    model: string | null;
+    embedding_provider: string;
+    ollama: OllamaStatus;
+  };
   automation: { proxies: number; captcha: boolean; dry_run: boolean; auto_stage: boolean };
   notifications: { smtp: boolean; discord: boolean; slack: boolean };
   ats_credentials: string[];
+}
+
+export interface OllamaPullProgress {
+  status: "idle" | "pulling" | "success" | "error";
+  model: string | null;
+  /** Ollama's own step, e.g. "pulling manifest", "verifying sha256 digest". */
+  detail: string | null;
+  completed: number;
+  total: number;
+  percent: number;
+  error: string | null;
+}
+
+export interface OllamaStatus {
+  configured: boolean;
+  /** Scheme + host only; keys are never sent to the dashboard. */
+  base_url: string;
+  cloud: boolean;
+  model: string | null;
+  reachable: boolean;
+  version: string | null;
+  /** null when it can't be known (Ollama unreachable, or a cloud model). */
+  model_pulled: boolean | null;
+  models: string[];
+  error: string | null;
+  pull: OllamaPullProgress | null;
+}
+
+export interface LLMTestResult {
+  ok: boolean;
+  provider: string | null;
+  model: string | null;
+  latency_ms: number;
+  sample?: string;
+  error?: string;
+  hint?: string;
 }
 
 export interface FieldMapping {

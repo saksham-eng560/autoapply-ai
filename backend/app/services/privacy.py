@@ -39,6 +39,7 @@ def _row(obj: Any, exclude: set[str] | None = None) -> dict[str, Any]:
 
 
 SECRET_USER_FIELDS = {"hashed_password", "google_access_token", "google_refresh_token", "linkedin_session_cookie",
+                      "internshala_session",
                       "ats_credentials"}
 
 

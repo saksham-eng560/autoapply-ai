@@ -11,11 +11,16 @@
 #   BRANCH             git branch to deploy (default: main).
 #   REPO_URL           git repository (default: the public AutoApply AI repo).
 #   APP_DIR            install directory (default: ~/autoapply-ai).
+#   WITH_OLLAMA=1      also run a free AI model on this server with Ollama (in Docker, never exposed to the
+#                      internet) and use it for scoring, tailoring and answers. Safe to add on a re-run.
+#   OLLAMA_MODEL       the Ollama model to download (default: qwen3.5:4b, about 3.4 GB of disk).
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/saksham-eng560/autoapply-ai.git}"
 BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/autoapply-ai}"
+WITH_OLLAMA="${WITH_OLLAMA:-0}"
+DEFAULT_OLLAMA_MODEL="qwen3.5:4b"
 COMPOSE=(docker compose -f docker-compose.prod.yml)
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -81,6 +86,20 @@ set_env() {  # set_env KEY VALUE  -> replaces or appends KEY=VALUE in .env
   fi
 }
 
+env_get() {  # env_get KEY -> its value in .env without inline comment / quotes (empty if missing)
+  sed -n "s/^$1=//p" .env | tail -n 1 | sed -e 's/^#.*$//' -e 's/[[:space:]]#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    -e 's/^"\(.*\)"$/\1/'
+}
+
+set_env_if_empty() {  # set_env_if_empty KEY VALUE -> only when KEY is missing or empty in .env
+  [ -z "$(env_get "$1")" ] || return 1
+  set_env "$1" "$2"
+}
+
+compose_() {
+  if docker info >/dev/null 2>&1; then "${COMPOSE[@]}" "$@"; else sudo_ "${COMPOSE[@]}" "$@"; fi
+}
+
 public_ip() {
   curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true
 }
@@ -115,13 +134,71 @@ write_env() {
   set_env ANTHROPIC_API_KEY "${ANTHROPIC_API_KEY:-}"
 }
 
+configure_ollama() {  # WITH_OLLAMA=1: Ollama container (compose profile) + .env entries; existing values are kept
+  [ "$WITH_OLLAMA" = 1 ] || return 0
+  cd "$APP_DIR"
+  log "Setting up free AI with Ollama (in Docker on this server, never exposed to the internet)"
+  local profiles url
+  profiles="$(env_get COMPOSE_PROFILES)"
+  case ",$profiles," in
+    *,ollama,*) ;;
+    ",,") set_env COMPOSE_PROFILES ollama ;;
+    *) set_env COMPOSE_PROFILES "$profiles,ollama" ;;
+  esac
+  if [ -n "${OLLAMA_MODEL:-}" ]; then
+    set_env OLLAMA_MODEL "$OLLAMA_MODEL"  # chosen explicitly for this run
+  else
+    set_env_if_empty OLLAMA_MODEL "$DEFAULT_OLLAMA_MODEL" || true
+  fi
+  set_env_if_empty LLM_PROVIDER ollama || true
+  url="$(env_get OLLAMA_BASE_URL)"
+  case "$url" in
+    ""|http://localhost:11434|http://127.0.0.1:11434) set_env OLLAMA_BASE_URL http://ollama:11434 ;;
+    http://ollama:11434) ;;
+    *) echo "Keeping the OLLAMA_BASE_URL already in .env" ;;
+  esac
+  echo "Model: $(env_get OLLAMA_MODEL)   LLM_PROVIDER: $(env_get LLM_PROVIDER)"
+  if [ "$(env_get LLM_PROVIDER)" != "ollama" ]; then
+    echo "Note: LLM_PROVIDER isn't 'ollama', so an Anthropic / OpenAI key in .env (if set) is used first and Ollama is the fallback."
+  fi
+}
+
+model_size() {
+  case "$1" in
+    qwen3.5:4b) echo "about 3.4 GB" ;;
+    qwen3.5:9b) echo "about 6.6 GB" ;;
+    qwen3:4b) echo "about 2.5 GB" ;;
+    qwen3:8b) echo "about 5.2 GB" ;;
+    llama3.2:3b|llama3.2) echo "about 2 GB" ;;
+    *) echo "a few GB" ;;
+  esac
+}
+
 start_stack() {
   cd "$APP_DIR"
   log "Building and starting the stack (first build takes 5-15 minutes)"
-  if docker info >/dev/null 2>&1; then
-    "${COMPOSE[@]}" up -d --build --remove-orphans
-  else  # the docker group is not active in this login session yet
-    sudo_ "${COMPOSE[@]}" up -d --build --remove-orphans
+  compose_ up -d --build --remove-orphans  # sudo when the docker group isn't active in this login session yet
+}
+
+pull_ollama_model() {
+  [ "$WITH_OLLAMA" = 1 ] || return 0
+  cd "$APP_DIR"
+  local model
+  model="$(env_get OLLAMA_MODEL)"; model="${model:-$DEFAULT_OLLAMA_MODEL}"
+  case "$model" in *-cloud|*:cloud) log "$model is a cloud model: nothing to download"; return 0 ;; esac
+  log "Downloading the AI model $model inside the ollama container ($(model_size "$model") of disk, one time)"
+  for _ in $(seq 1 30); do
+    compose_ exec -T ollama ollama list >/dev/null 2>&1 && break
+    sleep 2
+  done
+  if compose_ exec -T ollama ollama pull "$model"; then
+    printf '\nModel %s is ready. Disk used by Ollama models: %s\n' "$model" \
+      "$(compose_ exec -T ollama du -sh /root/.ollama 2>/dev/null | cut -f1 || echo unknown)"
+    echo "Without a GPU each AI answer takes about 1-3 minutes on this server; scans give it the top"
+    echo "OLLAMA_MAX_EVALUATIONS_PER_SCAN (15) jobs and score the rest instantly."
+  else
+    echo "Could not download $model now. Press \"Download model\" in Settings > Integrations later, or run:"
+    echo "  cd $APP_DIR && docker compose -f docker-compose.prod.yml exec ollama ollama pull $model"
   fi
 }
 
@@ -139,6 +216,8 @@ Next steps:
   2. Then block other sign-ups:  cd $APP_DIR && sed -i "s/^ALLOW_REGISTRATION=.*/ALLOW_REGISTRATION=false/" .env && docker compose -f docker-compose.prod.yml up -d
   3. Add your API keys privately with an editor (never on the command line):
        nano $APP_DIR/.env    then:  cd $APP_DIR && docker compose -f docker-compose.prod.yml up -d
+  4. Settings > Integrations > AI model shows which AI is active; press "Test AI" to try it.
+     No API key? Re-run this script with WITH_OLLAMA=1 in front of bash for a free model on this server.
 Logs:    cd $APP_DIR && docker compose -f docker-compose.prod.yml logs -f
 Update:  re-run this script
 EOF
@@ -164,5 +243,7 @@ open_firewall
 add_swap
 fetch_code
 write_env
+configure_ollama
 start_stack
+pull_ollama_model
 wait_until_live

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser, ExtensionUser
+from app.api.deps import DB, CurrentUser, ExtensionUser, limiter
 from app.api.serializers import user_out
+from app.automation.browser import BrowserUnavailable
 from app.automation.proxy import proxy_manager
 from app.config import settings
 from app.models.user import UserFieldMapping, merge_preferences
@@ -17,17 +19,20 @@ from app.schemas.user import (
     ATSCredentialsUpdate,
     DeleteAccountRequest,
     FieldMappingsUpdate,
+    InternshalaSessionIn,
     LinkedInCookieIn,
     PreferencesUpdate,
     ProfileUpdate,
 )
+from app.services import agent_orchestrator as orch
+from app.services.ai_setup import PullError, connection_test, llm_section, pull_progress, start_pull
 from app.services.google_oauth import has_scope
-from app.services.llm import get_llm
 from app.services.location_focus import get_season
 from app.services.presets import apply_preset
 from app.services.privacy import delete_user_data, export_user_data
 from app.services.progress import send_now as send_progress_now
 from app.services.question_answerer import STANDARD_FIELDS
+from app.submitters import internshala_apply
 from app.worker.dispatch import enqueue
 
 router = APIRouter(prefix="/users/me", tags=["users"])
@@ -72,8 +77,17 @@ def _validate_focus(prefs: dict) -> None:  # type: ignore[type-arg]
         raise HTTPException(422, "progress_digest must be 'daily', 'weekly' or 'off'")
 
 
+def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
+    for key in ("internshala_bot_enabled", "internshala_auto_submit"):
+        if not isinstance(prefs.get(key), bool):
+            raise HTTPException(422, f"{key} must be true or false")
+    limit = prefs.get("internshala_daily_limit")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 25:
+        raise HTTPException(422, "internshala_daily_limit must be 1-25")
+
+
 @router.put("/preferences")
-def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
+def update_preferences(body: PreferencesUpdate, user: CurrentUser, db: DB) -> dict:
     unknown = set(body.preferences) - ALLOWED_PREF_KEYS
     if unknown:
         raise HTTPException(422, f"Unknown preference keys: {sorted(unknown)}")
@@ -95,7 +109,15 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     if per_source is not None and (not isinstance(per_source, int) or not 10 <= per_source <= 1000):
         raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
     _validate_focus(prefs)
+    _validate_internshala(prefs)
+    turned_on = prefs["internshala_bot_enabled"] and not user.prefs.get("internshala_bot_enabled")
+    if turned_on:
+        consents = dict(user.consents or {})
+        consents["internshala_bot"] = datetime.now(UTC).isoformat()  # you turned it on after the terms warning
+        user.consents = consents
     user.preferences = prefs
+    if turned_on:
+        orch.restage_internshala_waiting(db, user)  # fill the real forms of anything prepared while it was off
     return prefs
 
 
@@ -176,7 +198,6 @@ def update_ats_credentials(body: ATSCredentialsUpdate, user: CurrentUser) -> dic
 # ------------------------------------------------------------------ integrations
 @router.get("/integrations")
 def integrations(user: CurrentUser) -> dict:
-    llm = get_llm()
     return {
         "google": {
             "configured": settings.google_configured,
@@ -194,14 +215,45 @@ def integrations(user: CurrentUser) -> dict:
             "profile_diff": (user.linkedin_profile_snapshot or {}).get("diff"),
             "synced_at": (user.linkedin_profile_snapshot or {}).get("synced_at"),
         },
-        "llm": {"providers": llm.provider_names, "model": settings.ANTHROPIC_MODEL if settings.ANTHROPIC_API_KEY else None,
-                "embedding_provider": settings.EMBEDDING_PROVIDER},
+        "internshala": {  # never the cookies themselves
+            "connected": bool(user.internshala_session),
+            "session_valid": bool(user.internshala_session_valid),
+            "updated_at": user.internshala_session_updated_at.isoformat() if user.internshala_session_updated_at else None,
+            "bot_enabled": bool(user.prefs.get("internshala_bot_enabled")),
+            "auto_submit": bool(user.prefs.get("internshala_auto_submit")),
+            "daily_limit": int(user.prefs.get("internshala_daily_limit") or 15),
+        },
+        "llm": llm_section(),
         "automation": {"proxies": len(proxy_manager.urls), "captcha": bool(settings.CAPTCHA_API_KEY),
                        "dry_run": settings.SUBMISSION_DRY_RUN, "auto_stage": settings.AUTO_STAGE_APPLICATIONS},
         "notifications": {"smtp": bool(settings.SMTP_HOST), "discord": bool(user.prefs.get("discord_webhook_url") or settings.DISCORD_WEBHOOK_URL),
                           "slack": bool(user.prefs.get("slack_webhook_url") or settings.SLACK_WEBHOOK_URL)},
         "ats_credentials": sorted((user.ats_credentials or {}).keys()),
     }
+
+
+# AI model: keys live only in .env on the machine running the app; these endpoints never take or show one.
+@router.post("/integrations/llm/test")
+@limiter.limit("10/minute")
+def test_llm(request: Request, user: CurrentUser) -> dict:
+    """Send one tiny request to the configured AI model: {ok, provider, model, latency_ms, sample | error, hint}."""
+    return connection_test()
+
+
+@router.post("/integrations/ollama/pull", status_code=202)
+@limiter.limit("10/minute")
+def pull_ollama_model(request: Request, user: CurrentUser) -> dict:
+    """Start downloading OLLAMA_MODEL into Ollama in the background."""
+    try:
+        return start_pull()
+    except PullError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get("/integrations/ollama/pull")
+def ollama_pull_progress(user: CurrentUser) -> dict:
+    """Download progress: {status: idle | pulling | success | error, completed, total, percent, error}."""
+    return pull_progress()
 
 
 @router.post("/integrations/linkedin-cookie")
@@ -231,6 +283,83 @@ def trigger_linkedin_sync(user: CurrentUser, db: DB) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "LinkedIn session not synced yet")
     enqueue("linkedin_sync_user", str(user.id), after_commit=db)
     return {"queued": True}
+
+
+INTERNSHALA_DOMAIN = re.compile(r"\.?(?:[a-z0-9-]+\.)*internshala\.com")
+COOKIE_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+MAX_INTERNSHALA_SESSION_CHARS = 32_000
+
+
+@router.post("/integrations/internshala-session")
+def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser, db: DB) -> dict:
+    """The extension sends your internshala.com cookies (httpOnly ones included); stored encrypted."""
+    now = datetime.now(UTC)
+    if body.reason != "manual" and (user.consents or {}).get("internshala_disconnected"):
+        # You disconnected Internshala in the dashboard: background re-syncs don't undo that.
+        raise HTTPException(status.HTTP_409_CONFLICT, "Internshala was disconnected in your dashboard — click "
+                                                      "“Sync Internshala session” in the extension to connect it again.")
+    cookies: dict[tuple[str, str, str], dict] = {}  # type: ignore[type-arg]
+    for c in body.cookies:
+        domain = c.domain.strip().lower()
+        if not INTERNSHALA_DOMAIN.fullmatch(domain):
+            raise HTTPException(422, f"Only internshala.com cookies are accepted, not {domain[:60]}")
+        if not COOKIE_NAME.fullmatch(c.name) or any(ord(ch) < 32 or ch in ";\x7f" for ch in c.value):
+            raise HTTPException(422, f"Invalid cookie {c.name[:40]}")
+        if c.expiration_date is not None and c.expiration_date < now.timestamp():
+            continue  # already expired
+        path = c.path or "/"
+        cookies[(c.name, domain, path)] = {
+            "name": c.name, "value": c.value, "domain": domain, "path": path, "secure": c.secure, "httpOnly": c.http_only,
+            "sameSite": c.same_site, "expirationDate": c.expiration_date,
+            "hostOnly": c.host_only if c.host_only is not None else not domain.startswith("."),
+        }
+    stored = list(cookies.values())
+    if sum(len(c["name"]) + len(c["value"]) for c in stored) > MAX_INTERNSHALA_SESSION_CHARS:
+        raise HTTPException(413, "Too many Internshala cookies")
+    if not any(c["name"] in internshala_apply.SESSION_COOKIES and c["value"] for c in stored):
+        raise HTTPException(422, "No Internshala session cookie found — log into Internshala in Chrome and sync again")
+    if not internshala_apply.has_login(stored):
+        raise HTTPException(422, "You're not logged into Internshala in this browser — log in and sync again")
+    user.internshala_session = stored
+    user.internshala_session_updated_at = now
+    user.internshala_session_valid = True
+    consents = dict(user.consents or {})
+    consents["internshala"] = now.isoformat()
+    consents.pop("internshala_disconnected", None)
+    user.consents = consents
+    orch.restage_internshala_waiting(db, user)
+    return {"ok": True, "synced_at": now.isoformat(), "cookies": len(stored)}
+
+
+@router.delete("/integrations/internshala")
+def disconnect_internshala(user: CurrentUser) -> dict:
+    """Forget the Internshala login and turn the bot off; the extension's automatic re-syncs stop too
+    (until you click Sync in the extension yourself)."""
+    user.internshala_session = None
+    user.internshala_session_updated_at = None
+    user.internshala_session_valid = False
+    user.preferences = {**(user.preferences or {}), "internshala_bot_enabled": False, "internshala_auto_submit": False}
+    consents = dict(user.consents or {})
+    consents["internshala_disconnected"] = datetime.now(UTC).isoformat()
+    user.consents = consents
+    return {"ok": True}
+
+
+@router.post("/integrations/internshala/check")
+def check_internshala_session(user: CurrentUser, db: DB) -> dict:
+    """Open Internshala with your synced login in a real browser and see whether it's still signed in."""
+    if not user.internshala_session:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Internshala login not synced yet — use the browser extension")
+    try:
+        valid = internshala_apply.check_session(user.internshala_session)
+    except BrowserUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"No browser available to check the session: {exc}") from exc
+    except Exception as exc:  # a timeout or network error: report it, keep the stored state
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not reach Internshala: {exc}") from exc
+    user.internshala_session_valid = valid
+    if valid:
+        orch.restage_internshala_waiting(db, user)
+    return {"session_valid": valid, "checked_at": datetime.now(UTC).isoformat()}
 
 
 # ------------------------------------------------------------------ privacy

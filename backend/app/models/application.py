@@ -50,6 +50,8 @@ class Application(Base):
 
     # ATS-specific answers: [{question, field_type, answer, confidence, needs_user_review}]
     custom_answers: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType)
+    # Your corrections from the review queue: field key (profile key or form label) -> value
+    field_overrides: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     ats_platform: Mapped[ATSPlatform | None] = mapped_column(ATS_PLATFORM_ENUM)
     form_fields: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType)
     needs_manual_review: Mapped[bool] = mapped_column(Boolean, default=False)

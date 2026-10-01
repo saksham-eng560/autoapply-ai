@@ -149,6 +149,7 @@ def application_detail(app: Application, communications: list[Communication], in
             "similarity_score": app.similarity_score,
             "cover_letter": app.cover_letter,
             "custom_answers": app.custom_answers or [],
+            "field_overrides": app.field_overrides or {},
             "form_fields": app.form_fields or [],
             "tailored_resume": resume_out(app.tailored_resume) if app.tailored_resume else None,
             "tailored_resume_pdf_url": file_url(app.tailored_resume_pdf_url),

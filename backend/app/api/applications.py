@@ -9,15 +9,25 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from app.api.deps import DB, CurrentUser, parse_uuid
-from app.api.serializers import MANUAL_URL_PREFIX, application_detail, application_summary, history_out, resume_out
+from app.api.serializers import (
+    MANUAL_URL_PREFIX,
+    application_detail,
+    application_summary,
+    file_url,
+    history_out,
+    iso,
+    resume_out,
+)
 from app.models.application import Application, ApplicationStatusHistory
 from app.models.communication import Communication
 from app.models.enums import ApplicationStatus, ATSPlatform, JobType
 from app.models.interview import Interview
 from app.models.job import Job
+from app.models.user import User
 from app.schemas.application import (
     ApplicationUpdate,
     ApproveRequest,
+    DirectSubmitRequest,
     ManualApplicationCreate,
     SelfAppliedRequest,
     StatusUpdate,
@@ -26,6 +36,7 @@ from app.schemas.application import (
 from app.schemas.resume_content import normalize_resume
 from app.scrapers import ScrapedJob, detect_ats_platform
 from app.services import agent_orchestrator as orch
+from app.services import review_sheet
 from app.services.application_service import set_status
 from app.worker.dispatch import enqueue
 
@@ -111,6 +122,79 @@ def _self_applied_exists():  # type: ignore[no-untyped-def]
                    ApplicationStatusHistory.new_status == ApplicationStatus.APPLIED,
                    ApplicationStatusHistory.changed_by == "user")
             .exists())
+
+
+# --------------------------------------------------------------------------- "Ready to submit"
+def _submit_queue(user_id: uuid.UUID, *columns):  # type: ignore[no-untyped-def]
+    """Applications the agent filled and paused for you: best match first, then the longest waiting."""
+    return (select(*columns) if columns else select(Application)).where(
+        Application.user_id == user_id, Application.status == ApplicationStatus.PENDING_APPROVAL,
+    ).order_by(Application.match_score.desc().nulls_last(), Application.staged_at.asc().nulls_last(),
+               Application.created_at.asc())
+
+
+def _queue_item(user: User, app: Application) -> dict:
+    job = app.job
+    rows = review_sheet.review_rows(app, resume_url=file_url(app.tailored_resume_pdf_url))
+    apply_url = job.application_url or (None if job.source_url.startswith(MANUAL_URL_PREFIX) else job.source_url)
+    return {
+        **application_summary(app),
+        "form_screenshot_url": file_url(app.form_screenshot_url),
+        "tailored_resume_pdf_url": file_url(app.tailored_resume_pdf_url),
+        "staged_at": iso(app.staged_at),
+        "blocker": orch.direct_submit_blocker(user, app),
+        "apply_url": apply_url,
+        "rows": rows,
+        "attention": sum(1 for r in rows if review_sheet.needs_attention(r)),
+    }
+
+
+def _next_in_queue(order: list[uuid.UUID], current: uuid.UUID) -> str | None:
+    """The queue item after ``current`` (wrapping around to the start); None when nothing else waits."""
+    rest = order
+    if current in order:
+        i = order.index(current)
+        rest = order[i + 1:] + order[:i]
+    return str(rest[0]) if rest else None
+
+
+@router.get("/review-queue")
+def review_queue(user: CurrentUser, db: DB, limit: int = Query(default=100, ge=1, le=200)) -> dict:
+    """"Ready to submit": each paused application as a review sheet, one row per prefilled item."""
+    query = _submit_queue(user.id)
+    total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    return {"items": [_queue_item(user, a) for a in db.scalars(query.limit(limit)).all()], "total": total}
+
+
+@router.post("/{application_id}/submit", status_code=202)
+def submit_now(application_id: str, body: DirectSubmitRequest, user: CurrentUser, db: DB) -> dict:
+    """Your one click after checking every prefilled row: explicit approval, exactly like /approve.
+
+    Corrections are saved first (profile values and form labels as overrides the submitter types
+    verbatim, question answers as your answers), then the normal approval path submits it.
+    """
+    app = _get(db, user.id, application_id)
+    if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"This application is {app.status.value.replace('_', ' ')}: there's nothing to submit")
+    blocker = orch.direct_submit_blocker(user, app)
+    if blocker:
+        raise HTTPException(status.HTTP_409_CONFLICT, blocker)
+    try:
+        edits = review_sheet.apply_edits(app, [(r.key, r.value) for r in body.rows], body.cover_letter)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    missing = review_sheet.missing_required(app.form_fields, edits)
+    if missing:
+        raise HTTPException(422, "Fill in the required field(s) before submitting: " + "; ".join(missing))
+    order = list(db.scalars(_submit_queue(user.id, Application.id)))
+    app.field_overrides = edits.overrides or None
+    note = "Submitted from Ready to submit" + (f" (you corrected: {', '.join(edits.changed)[:300]})" if edits.changed else "")
+    try:
+        orch.approve_application(db, app, cover_letter=edits.cover_letter, custom_answers=edits.answers, note=note)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return {**_detail(db, app), "next_id": _next_in_queue(order, app.id)}
 
 
 @router.get("/{application_id}")

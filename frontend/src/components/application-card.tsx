@@ -6,7 +6,12 @@ import { StatusBadge } from "@/components/status-badge";
 import type { ApplicationSummary } from "@/lib/types";
 import { PLATFORM_LABELS, timeAgo } from "@/lib/utils";
 
-export function ApplicationCard({ app, showIApplied = true }: { app: ApplicationSummary; showIApplied?: boolean }) {
+export function ApplicationCard({ app, showIApplied = true, action }: {
+  app: ApplicationSummary;
+  showIApplied?: boolean;
+  /** An extra button next to the status (e.g. "Review & submit"). */
+  action?: React.ReactNode;
+}) {
   const job = app.job;
   return (
     <div className="group relative flex items-center gap-4 border bg-card p-4 transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-foreground/60 motion-reduce:hover:translate-y-0">
@@ -29,6 +34,7 @@ export function ApplicationCard({ app, showIApplied = true }: { app: Application
       <div className="relative z-10 flex shrink-0 items-center gap-2">
         {app.self_applied && <SelfAppliedTag className="hidden md:inline-flex" />}
         {showIApplied && canSelfApply(app.status) && <IAppliedButton applicationId={app.id} className="hidden sm:inline-flex" />}
+        {action}
         <StatusBadge status={app.status} />
       </div>
       <ArrowUpRight className="hidden h-4 w-4 text-muted-foreground transition-colors group-hover:text-primary sm:block" />

@@ -42,12 +42,14 @@ and shows you what is working.
 - ["I Applied" and progress tracking](#i-applied-and-progress-tracking)
 - [Fast scans with a live progress bar](#fast-scans-with-a-live-progress-bar)
 - [How forms get filled](#how-forms-get-filled)
+- [Ready to submit: check it, fix it, send it](#ready-to-submit-check-it-fix-it-send-it)
 - [How it works](#how-it-works)
+- [Free AI with Ollama](#free-ai-with-ollama)
 - [Quick start (Docker)](#quick-start-docker)
 - [Try the whole loop safely with the demo careers site](#try-the-whole-loop-safely-with-the-demo-careers-site)
 - [Using it for real](#using-it-for-real)
 - [Connect Gmail and Google Calendar](#connect-gmail-and-google-calendar)
-- [LinkedIn and the Chrome extension](#linkedin-and-the-chrome-extension)
+- [LinkedIn, Internshala and the Chrome extension](#linkedin-internshala-and-the-chrome-extension)
 - [Local development without Docker](#local-development-without-docker)
 - [Deployment](#deployment)
 - [Testing and CI](#testing-and-ci)
@@ -77,6 +79,7 @@ your browser and streams the logs. **Ctrl-C stops everything.**
 | `./start.sh --prod` | Production build of the dashboard (faster pages). |
 | `./start.sh --docker` | The full Docker Compose stack (PostgreSQL + pgvector, Redis, worker, beat). `./start.sh --stop` stops it. |
 | `./start.sh --reset` | Wipes the local database first. |
+| `./start.sh --ollama` | Sets up a free AI model on this computer with Ollama: checks it, downloads the model, fills in `.env` (see [Free AI with Ollama](#free-ai-with-ollama)). |
 | `start.bat` | Windows: the Docker path (`start.bat stop` to stop). Or use WSL and `./start.sh`. |
 
 Your first ten minutes:
@@ -88,8 +91,9 @@ Your first ten minutes:
    stop in Needs approval instead of being submitted.
 5. **Scan for jobs now**, then open **Swipe Review** and start swiping.
 
-Add `ANTHROPIC_API_KEY=...` to `.env` for much better scoring, tailoring and answers (everything also
-works without it on built-in heuristics). `make start` does the same as `./start.sh`.
+Add `ANTHROPIC_API_KEY=...` to `.env` for much better scoring, tailoring and answers, or run
+`./start.sh --ollama` for a free model on your own computer (everything also works without either, on
+built-in heuristics). `make start` does the same as `./start.sh`.
 
 ## What it does
 
@@ -221,8 +225,12 @@ as the prime location. All of it is in Settings › Preferences › Internship f
   doesn't say so. Change the share with the slider (50–100%) or switch the focus off.
 - **Summer 2027.** Postings clearly for another term ("Summer 2026", "Fall '26", "Intern 2026") are
   skipped. Ones that don't say are kept, and ones that start immediately get a heads-up.
-- **Internshala applications** need your own Internshala login, so for those the agent prepares your
-  resume and answers and then asks you to apply there. Click **I Applied** afterwards and it's tracked.
+- **Internshala applications** need your own Internshala login. By default the agent prepares your
+  resume and answers and asks you to apply there; click **I Applied** afterwards and it's tracked. If
+  you turn on the opt-in **Internshala bot** (see
+  [LinkedIn, Internshala and the Chrome extension](#linkedin-internshala-and-the-chrome-extension)),
+  the agent fills the Internshala form itself with your synced login and sends it when you click
+  **Submit**.
 
 Internshala changes its pages from time to time. Check the scraper on your server with
 `backend/.venv/bin/python scripts/test_scraper.py internshala -k "Software Engineer" -l Delhi`.
@@ -298,6 +306,38 @@ value again the way the page expects.
 - **Written answers** ("Why this internship?") are specific, grounded in your resume and the job,
   and fit the field's length limit.
 
+## Ready to submit: check it, fix it, send it
+
+When the agent has filled an application and is waiting for you, it appears in **Ready to submit**
+(`/dashboard/submit`, in the sidebar with a count). Applications show one at a time, best match first,
+with a screenshot of the filled form. Anything that needs your attention is at the top: a required
+question it couldn't answer, a low-confidence answer, a field it couldn't fill.
+
+Each prefilled item has two buttons:
+
+- **✓ Correct** confirms it.
+- **✗ Fix** turns it into an edit box right there. What you type is exactly what gets sent.
+
+The cover letter is editable in place, and the resume links to the PDF that will be uploaded. When
+every row is checked, press **Submit application**. The agent opens the form again, fills it with what
+you approved, including your fixes, and submits. Then the next application loads.
+
+| Key | Action |
+|---|---|
+| `Y` | Confirm the selected row and move to the next |
+| `N` | Fix the selected row |
+| `J` / `K` | Move down / up |
+| `A` | Confirm all rows that aren't flagged |
+| `Enter` | Submit, once everything is confirmed |
+| `S` | Skip for now |
+
+Your fixes are learned. Corrected answers to common questions (notice period, relocation, highest education
+and work authorization) are saved, so they come pre-filled correctly next time.
+
+Internshala postings are submitted here too once the [Internshala bot](#the-internshala-bot-opt-in) is
+on. Otherwise the card shows **Apply on Internshala** with your prepared answers (each with a **Copy**
+button) and **I Applied** for afterwards.
+
 ## How it works
 
 ```
@@ -314,7 +354,7 @@ value again the way the page expects.
                  │ Celery worker + beat   scan → match → ⏸ swipe → tailor → fill (Playwright) → submit │
                  │                        → Gmail monitor → calendar → reminders → analytics          │
                  └─────────────┬───────────────────────────┬──────────────────────────┬───────────────┘
-                   Claude (Anthropic API, structured        Job boards & ATS          Gmail · Calendar
+                   Claude or Ollama (JSON-schema            Job boards & ATS          Gmail · Calendar
                    outputs; offline heuristics fallback)    (APIs + Chromium)         (Google OAuth)
 ```
 
@@ -325,9 +365,117 @@ application's history.
 
 **AI.** Claude is the primary model (`ANTHROPIC_MODEL`, default `claude-opus-5-5`), using JSON-schema
 structured outputs, prompt caching and a refusal fallback. OpenAI is an optional secondary provider.
-**Without any API key, every step still works** on built-in heuristics: keyword-based resume parsing,
+**Ollama** runs a free open model on your own computer or server, or on Ollama Cloud, with JSON-schema
+constrained answers (see [Free AI with Ollama](#free-ai-with-ollama)). `LLM_PROVIDER` picks which one
+goes first; the others are fallbacks. **Without any of them, every step still works** on built-in heuristics: keyword-based resume parsing,
 rule-based scoring, template tailoring and cover letters, and rule-based e-mail classification. The
 quality is lower but it's fully functional. All prompts are plain text files in [`prompts/`](prompts).
+
+## Free AI with Ollama
+
+[Ollama](https://ollama.com) runs open AI models on your own computer or server, for free and with no
+API key. AutoApply talks to it through Ollama's own API with JSON-schema constrained answers, so job
+scoring, resume tailoring, cover letters and form answers all work without Claude. Claude is still the
+better writer: with `LLM_PROVIDER` left empty (auto), a Claude key goes first and Ollama becomes the
+fallback; `LLM_PROVIDER=ollama` puts Ollama first.
+
+**Which model.** Pick one that fits in memory. Download sizes are approximate, and the speeds are rough
+estimates for a CPU-only server such as Oracle's free 4-core ARM machine. An Apple Silicon Mac answers
+in seconds rather than minutes.
+
+| `OLLAMA_MODEL` | Download | Quality | Rough time per answer, 4 ARM cores, no GPU |
+|---|---|---|---|
+| `qwen3.5:4b` (default) | ~3.4 GB | Good scores and answers, plain writing | 1–2 min |
+| `qwen3.5:9b` | ~6.6 GB | Better writing and reasoning | 2–4 min |
+| `qwen3:4b` / `qwen3:8b` | ~2.5 / ~5.2 GB | Proven alternatives | similar to the above |
+| `llama3.2:3b` | ~2 GB | Fastest, weakest on long resumes | under 1 min |
+
+### On your Mac
+
+1. Install the Ollama app from https://ollama.com/download (or `brew install ollama`) and open it
+   once. It serves on `http://localhost:11434`.
+2. Run `./start.sh --ollama`. It checks that Ollama is running, downloads `qwen3.5:4b` once (showing
+   progress), and adds `LLM_PROVIDER=ollama` and `OLLAMA_MODEL=qwen3.5:4b` to `.env` only if those are
+   missing or empty. It never overwrites a value you set or touches any other line.
+3. Open **Settings › Integrations › AI model** and press **Test AI**.
+
+The Docker stack (`./start.sh --docker --ollama`) uses the same Ollama app: inside a container,
+`localhost` in `OLLAMA_BASE_URL` automatically means your Mac (`host.docker.internal`).
+
+### On your Oracle server
+
+Re-run the setup script with `WITH_OLLAMA=1`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/saksham-eng560/autoapply-ai/main/scripts/server-setup.sh | WITH_OLLAMA=1 bash
+# another model:  ... | WITH_OLLAMA=1 OLLAMA_MODEL=qwen3.5:9b bash
+```
+
+The script keeps your `.env` and only fills in what's missing:
+
+- `COMPOSE_PROFILES=ollama` starts the `ollama` container (it's off by default);
+- `LLM_PROVIDER=ollama`;
+- `OLLAMA_BASE_URL=http://ollama:11434`;
+- `OLLAMA_MODEL`.
+
+It then downloads the model inside the container and prints the disk space it uses. Models live in the
+`ollama-models` volume, so updates don't download them again. Ollama's API has no password, so its
+port (11434) is never published: only the app's own containers can reach it. With 24 GB of RAM, the
+4B and 9B models fit next to the app comfortably.
+
+To do it by hand, add those four lines to `~/autoapply-ai/.env` and run
+`docker compose -f docker-compose.prod.yml up -d`. Then press **Download model** in Settings, or run
+`docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3.5:4b`.
+
+### Ollama Cloud
+
+Ollama also runs much bigger models on its own servers. Create an API key at
+https://ollama.com/settings/keys, then open `.env` in an editor and add:
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=https://ollama.com
+OLLAMA_MODEL=gpt-oss:120b
+OLLAMA_API_KEY=            # paste the key here, in .env only
+```
+
+Restart the app. `OLLAMA_API_KEY` is only for Ollama Cloud; a local Ollama needs no key. Keep it in
+`.env`, never on the command line or in the dashboard. Cloud models don't support JSON-schema output,
+so the app asks for JSON in the prompt and checks every answer, retrying once. The free plan runs one
+request at a time, which is what `OLLAMA_CONCURRENCY=1` does. You can also use cloud models through a
+local Ollama after `ollama signin`, with model names ending in `-cloud`.
+
+### Test it
+
+**Settings › Integrations › AI model** shows:
+
+- the active provider and model, and the fallbacks;
+- whether Ollama is reachable, its version, and whether the model is downloaded. If it isn't, a
+  **Download model** button downloads it with a progress bar;
+- a **Test AI** button that sends one small request and shows the answer and how long it took;
+- copyable `.env` lines for each setup above.
+
+The page never asks for keys or shows them. Edit `.env` and restart instead.
+
+### What to expect
+
+- **Slower.** Without a GPU an answer takes one to a few minutes. A scan gives the best
+  `OLLAMA_MAX_EVALUATIONS_PER_SCAN` (15) jobs to the model one at a time (`OLLAMA_CONCURRENCY=1`) and
+  scores the rest instantly with the built-in heuristic. Cards reach Swipe Review as they're scored.
+  Preparing a kept job (resume, cover letter, answers) takes several minutes.
+- **Plainer writing.** Small models score jobs well, but their cover letters and written answers are
+  less polished than Claude's. Now and then a reply misses the requested format: the app asks once
+  more, then falls back to heuristics. Every application goes through review, so you can fix anything
+  before it's submitted.
+- **Context.** `OLLAMA_NUM_CTX` (8192 tokens) is how much the model reads at once; Ollama's own
+  default is only 4096. Long job descriptions and resumes are shortened to fit. Raise it (for example
+  to 16384) if you have RAM to spare.
+- **Embeddings (optional).** `EMBEDDING_PROVIDER=ollama` uses `nomic-embed-text`
+  (`ollama pull nomic-embed-text`) instead of the built-in keyword matcher. After switching providers,
+  re-compute the stored vectors with `python scripts/migrate.py --reembed` (in Docker:
+  `docker compose exec api python scripts/migrate.py --reembed`).
+
+Every setting is described in the "Free AI with Ollama" block of [`.env.example`](.env.example).
 
 ## Quick start (Docker)
 
@@ -402,7 +550,8 @@ python3 scripts/demo_site.py --host 0.0.0.0     # or on its own (no dependencies
    - any careers page URL
 
    LinkedIn, Indeed, Glassdoor and Wellfound searches use your target roles and locations.
-5. Optionally **connect Google** (Gmail + Calendar) and **sync LinkedIn** with the Chrome extension.
+5. Optionally **connect Google** (Gmail + Calendar) and **sync LinkedIn** (and Internshala) with the
+   Chrome extension.
 6. Start with `SUBMISSION_DRY_RUN=true` for a day. You get everything except the final click. Then
    turn it off.
 
@@ -439,20 +588,69 @@ needs a public HTTPS URL.
 
 The watch is renewed daily.
 
-## LinkedIn and the Chrome extension
+## LinkedIn, Internshala and the Chrome extension
 
-LinkedIn search and Easy Apply run under your own LinkedIn session. The extension in
-[`extension/`](extension) copies your session cookie to your AutoApply server. The cookie is stored
-encrypted and re-synced every 12 hours and whenever it changes.
+LinkedIn search and Easy Apply run under your own LinkedIn session, and the optional Internshala bot
+under your own Internshala login. The extension in [`extension/`](extension) ("AutoApply AI — Session
+Sync") copies those sessions to your AutoApply server. They are stored encrypted and re-synced every
+12 hours and whenever LinkedIn or Internshala renews them.
 
 1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the
-   `extension/` folder. CI also builds a zip artifact of it.
-2. In the dashboard, go to **Settings → LinkedIn → Generate extension token**.
+   `extension/` folder. CI also builds a zip artifact of it. **Updating from 1.0?** Click the reload
+   icon on the extension card (or load the folder again): version 1.1 asks for access to
+   internshala.com.
+2. In the dashboard, go to **Settings → Integrations → Generate extension token**.
 3. Open the extension popup and enter your dashboard URL (for example `http://localhost:3000`) and the
    token. Allow access to that origin when Chrome asks, then click **Sync LinkedIn session** while
    logged in to LinkedIn.
 
-The extension only reads the LinkedIn `li_at` cookie and only sends it to the dashboard URL you entered.
+The extension reads the LinkedIn `li_at` cookie and, once you click **Sync Internshala session**, your
+internshala.com cookies (including the httpOnly login cookies, which a web page can't read). Nothing
+is sent anywhere except the dashboard URL you entered, and the dashboard never shows the cookie values.
+
+### The Internshala bot (opt-in)
+
+Internshala only takes applications from your own logged-in account, and logging in from a script hits
+a reCAPTCHA, so the bot borrows the login of your real Chrome instead.
+
+1. Log into [Internshala](https://internshala.com) in Chrome and click **Sync Internshala session** in
+   the extension popup. **Settings → Integrations → Internshala** shows the login as synced; **Check
+   session** opens Internshala with it to confirm it still works.
+2. Turn on **Let the agent apply on Internshala** and read the warning (below) before you confirm.
+3. Keep Internshala jobs in Swipe Review as usual. The agent opens each one in a real browser, clicks
+   **Apply now** (through the "Proceed to application" step when Internshala shows it) and fills the
+   form: the cover letter ("Why should you be hired for this role?", as plain text without a
+   salutation), your availability (kept at "available immediately" unless your saved *notice period*
+   answer says otherwise), the relocation box (from your saved *willing to relocate* answer) and every
+   assessment question, using your saved answers first. Your **Internshala profile resume** is what
+   Internshala attaches; the agent never replaces it. Nothing is sent: it takes a screenshot and the
+   application waits for you.
+4. Review it (the filled fields, answers and screenshot) and click **Submit**. Only then does the
+   agent open the form again, fill it the same way and click Internshala's Submit button; the
+   confirmation screenshot is saved with the application.
+5. Optional: **Submit automatically** sends Internshala jobs you keep as soon as they're filled.
+   Anything the agent is unsure about (a required question it couldn't answer, a low-confidence
+   eligibility answer) still waits for you.
+
+Limits: at most **Daily limit** Internshala applications a day (15 by default, 25 at most), 60–180
+seconds apart. Approved applications over the limit wait and go out the next day.
+
+What happens when an internship can't be applied to here:
+
+- **External listings** ("You will be redirected to another website"): nothing is submitted; the
+  application shows the company's own link so you can apply there.
+- **Already applied** on Internshala: the application is marked **Applied** and tracked, not failed.
+- **Applications closed**, or Internshala asks you to **complete your profile** first: the application
+  stays in your review queue with the reason.
+- **Session expired**: you get a notification ("open Internshala in Chrome and click Sync in the
+  extension"), Submit is paused until you re-sync, and the application stays in your queue.
+
+> **Account risk.** Internshala's terms don't allow bots or automated access without its consent, and
+> Internshala can restrict or suspend accounts it believes are automated. The bot is off by default,
+> applies slowly and only to internships you kept, and you review every application unless you turn on
+> Submit automatically. You use it at your own risk. Internshala also changes its pages from time to
+> time; every selector the bot uses is in one place, `SELECTORS` in
+> [`backend/app/submitters/internshala_apply.py`](backend/app/submitters/internshala_apply.py).
 
 ## Local development without Docker
 
@@ -532,6 +730,8 @@ Useful follow-ups:
 - **Changing settings**: edit `~/autoapply-ai/.env`, then run
   `docker compose -f docker-compose.prod.yml up -d` in that folder.
 - **Updating**: re-run the script.
+- **Free AI on the server**: re-run the script with `WITH_OLLAMA=1` in front of `bash`. See
+  [Free AI with Ollama](#free-ai-with-ollama).
 - **Idle servers**: Oracle may reclaim Always Free servers that stay almost completely idle for a
   week. Scheduled scans normally keep the server active enough. Upgrading the account to
   Pay-As-You-Go removes this risk, and Always Free resources stay free.
@@ -612,12 +812,12 @@ backend/
     services/       orchestrator, LLM client, matcher, tailor + truthfulness guard, cover letters, question
                     answerer, resume parser, PDF generator, Gmail, e-mail parser, calendar, notifier,
                     analytics, rate limiter, LinkedIn sync, privacy
-    submitters/     Greenhouse, Lever, Workday, LinkedIn Easy Apply, generic form engine
+    submitters/     Greenhouse, Lever, Workday, LinkedIn Easy Apply, Internshala (opt-in), generic form engine
     worker/         Celery app, beat schedule and tasks
   alembic/          migrations (pgvector, enums, indexes)
   tests/            unit, API, scraper-fixture and browser end-to-end tests
 frontend/           Next.js 14 dashboard (app router, Tailwind, shadcn/ui + Radix, framer-motion, SWR, Recharts, PWA)
-extension/          Chrome MV3 extension (LinkedIn session sync)
+extension/          Chrome MV3 extension (LinkedIn and Internshala session sync)
 prompts/            all LLM prompts as editable text files
 scripts/            demo careers site, migrations, seed data, scraper CLI, local scheduler
 start.sh, start.bat one-command launchers
@@ -631,7 +831,8 @@ PLAN.md             the full design this implementation follows
 - **Passwords**: bcrypt.
 - **Sessions**: httpOnly SameSite cookies, with `COOKIE_SECURE` in production. Short-lived scoped
   tokens for the WebSocket and the extension.
-- **Credentials**: OAuth refresh tokens and the LinkedIn cookie are encrypted at rest (AES-256-GCM).
+- **Credentials**: OAuth refresh tokens and the LinkedIn and Internshala sessions are encrypted at rest
+  (AES-256-GCM), and never returned by the API or included in your data export.
 - **Isolation**: every query is scoped to the signed-in user, and file downloads are checked against
   the owner.
 - **LLM prompts** never include passwords or tokens. Resume content is sent to the configured model
@@ -653,8 +854,9 @@ approved**.
 
 - **Truthfulness is enforced.** The agent can reword and reorder your experience, but it cannot invent
   it. Review every application anyway: you are the one submitting it.
-- **Respect site terms.** Some job sites, notably LinkedIn, Indeed and Glassdoor, restrict automated
-  access in their terms of service, and automated use can get an account restricted.
+- **Respect site terms.** Some job sites, notably LinkedIn, Internshala, Indeed and Glassdoor, restrict
+  automated access in their terms of service, and automated use can get an account restricted. The
+  Internshala bot is off until you turn it on.
   - The public ATS APIs (Greenhouse, Lever, Ashby, Workday) and company careers pages are the most
     reliable sources.
   - Use browser-based sources sparingly and keep the default rate limits.
@@ -673,9 +875,14 @@ approved**.
 | "Required answer(s) are empty" at approval | Eligibility questions are never guessed. Answer them once and they're remembered (also editable in **Settings → Saved answers**). |
 | Application fails with a CAPTCHA or bot block | Add a CAPTCHA-solver key and residential proxies to `.env`, or use **Mark as applied** after applying manually through the form link. |
 | LinkedIn session invalid | Log in to LinkedIn in Chrome and click **Sync LinkedIn session** in the extension. |
+| Internshala session expired | Open Internshala in Chrome (log in if needed) and click **Sync Internshala session** in the extension, then **Check session** in Settings › Integrations. |
+| Internshala bot says it can't find the Apply button or the form | Internshala changed its pages. Update the selectors in `SELECTORS` in `backend/app/submitters/internshala_apply.py`; meanwhile apply yourself and click **I Applied**. |
 | Google disconnects every 7 days | Your OAuth consent screen is in Testing mode (see [Connect Gmail and Google Calendar](#connect-gmail-and-google-calendar)). |
 | Chromium crashes in Docker | Give the worker more shared memory (`shm_size`, 1–2 GB is already set) and RAM. |
 | Change the AI's behaviour | Edit the prompt files in `prompts/`, then restart the API and worker. |
+| Test AI: "Ollama isn't running" | Open the Ollama app (Mac) or run `ollama serve`. On a server: `COMPOSE_PROFILES=ollama` in `.env`, then `docker compose -f docker-compose.prod.yml up -d`. Check `OLLAMA_BASE_URL`. |
+| Test AI: "model isn't downloaded" | Press **Download model** in Settings › Integrations, or run `ollama pull <model>` where Ollama runs. |
+| Ollama answers are cut off or slow | Raise `OLLAMA_NUM_CTX` (e.g. 16384) or `OLLAMA_TIMEOUT_SECONDS`, or pick a smaller model such as `llama3.2:3b`. |
 
 ## License
 

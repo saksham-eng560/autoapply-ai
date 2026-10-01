@@ -302,7 +302,7 @@ export default function SwipeReviewPage() {
                 <Label htmlFor="auto-submit" className="text-sm leading-snug">
                   <span className="font-semibold">Apply automatically</span>
                   <span className="mt-1 block text-xs font-normal text-muted-foreground">
-                    Submit as soon as the form is filled. Anything the agent can&apos;t answer (visa, work authorization) still waits for you in Applications.
+                    Submit as soon as the form is filled. Anything the agent can&apos;t answer (visa, work authorization) still waits for you in Ready to submit.
                   </span>
                 </Label>
                 <Switch id="auto-submit" checked={autoSubmit} onCheckedChange={setAutoSubmit} />

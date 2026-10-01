@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONType, UTCDateTime, utcnow
@@ -62,6 +62,10 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "auto_keep_min_score": None,    # optionally keep jobs scoring at least this without swiping
     "max_jobs_per_source": None,    # None = server default (MAX_JOBS_PER_SOURCE)
     "exclude_no_sponsorship": False,  # skip listings that say they don't sponsor visas
+    # --- Internshala apply bot (opt-in; Internshala's terms don't allow automated access) ---
+    "internshala_bot_enabled": False,  # fill Internshala applications with your synced Internshala login
+    "internshala_auto_submit": False,  # send them without your click (otherwise they wait for you)
+    "internshala_daily_limit": 15,     # at most this many Internshala applications a day (1-25)
     "sources": {
         # ATS boards to crawl directly (public APIs, no login needed)
         "greenhouse_boards": [],   # e.g. ["stripe", "airbnb"]
@@ -119,6 +123,11 @@ class User(Base):
     linkedin_cookie_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     linkedin_session_valid: Mapped[bool] = mapped_column(Boolean, default=False)
     linkedin_profile_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+
+    # Internshala login (cookies synced by the browser extension), encrypted JSON list of cookies
+    internshala_session: Mapped[list[dict[str, Any]] | None] = mapped_column(EncryptedJSON)
+    internshala_session_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    internshala_session_valid: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Per-ATS login credentials (e.g. Workday tenant accounts), encrypted JSON
     ats_credentials: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)

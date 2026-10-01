@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, cloneElement, isValidElement, useEffect, useId, useState } from "react";
 import useSWR from "swr";
-import { AlertTriangle, CheckCircle2, Copy, Download, KeyRound, Link2, Mail, Puzzle, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Copy, Cpu, Download, KeyRound, Link2, Mail, Puzzle, RefreshCw, Save, Trash2, Zap } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { TagInput } from "@/components/tag-input";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Modal } from "@/components/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Select } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -19,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { useIntegrations, useMe } from "@/hooks/use-applications";
 import { ApiError, api, del, fetcher, patch, post, put } from "@/lib/api-client";
-import type { FieldMapping, LocationFocus, Preferences, StandardField } from "@/lib/types";
+import type { FieldMapping, Integrations, LLMTestResult, LocationFocus, OllamaPullProgress, Preferences, StandardField } from "@/lib/types";
 import { PLATFORM_LABELS, cn, timeAgo } from "@/lib/utils";
 
 const ALL_PLATFORMS = ["internshala", "internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
@@ -213,7 +214,7 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
           <Row label="Company careers pages" hint="Any careers page — the agent reads JSON-LD job postings and follows embedded ATS boards.">
             <TagInput value={prefs.sources.career_pages} onChange={(v) => setSource("career_pages", v)} placeholder="https://company.com/careers" />
           </Row>
-          <Row label="Internshala searches" hint="Optional: paste any Internshala search URL (filters and all). Without these the agent searches your roles in your prime cities, work-from-home and all of India. You apply on Internshala yourself, then click “I Applied”.">
+          <Row label="Internshala searches" hint="Optional: paste any Internshala search URL (filters and all). Without these the agent searches your roles in your prime cities, work-from-home and all of India. Apply on Internshala yourself and click “I Applied”, or turn on the Internshala bot in Integrations.">
             <TagInput value={prefs.sources.internshala_urls || []} onChange={(v) => setSource("internshala_urls", v)} placeholder="https://internshala.com/internships/python-django-internship-in-delhi/" />
           </Row>
           <div className="pt-4"><Button onClick={save} loading={saving}><Save /> Save sources</Button></div>
@@ -431,6 +432,261 @@ function FieldMappingsForm() {
   );
 }
 
+// ------------------------------------------------------------------ AI model
+const PROVIDER_LABELS: Record<string, string> = { anthropic: "Claude (Anthropic)", openai: "OpenAI", ollama: "Ollama" };
+const providerLabel = (name: string | null) => (name ? PROVIDER_LABELS[name] ?? name : "None");
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+const SETUP_SCRIPT = "curl -fsSL https://raw.githubusercontent.com/saksham-eng560/autoapply-ai/main/scripts/server-setup.sh | WITH_OLLAMA=1 bash";
+
+const OLLAMA_SETUPS: { id: string; title: string; steps: React.ReactNode[]; env: string }[] = [
+  {
+    id: "mac",
+    title: "This computer (Mac)",
+    steps: [
+      <>Install the Ollama app from <a className="text-primary underline-offset-4 hover:underline" href="https://ollama.com/download" target="_blank" rel="noreferrer">ollama.com/download</a> and open it once.</>,
+      <>Add these lines to <code>.env</code> in the AutoApply folder.</>,
+      <>Restart with <code>./start.sh --ollama</code>. It checks Ollama and downloads the model (about 3.4 GB) for you.</>,
+    ],
+    env: "LLM_PROVIDER=ollama\nOLLAMA_MODEL=qwen3.5:4b\nOLLAMA_BASE_URL=http://localhost:11434",
+  },
+  {
+    id: "server",
+    title: "Your server (Docker)",
+    steps: [
+      <>Easiest: re-run the setup script with Ollama on. It sets all of this and downloads the model: <code className="break-all">{SETUP_SCRIPT}</code></>,
+      <>Or add these lines to <code>~/autoapply-ai/.env</code> yourself and restart with <code>docker compose -f docker-compose.prod.yml up -d</code>.</>,
+      <>Then press <strong>Download model</strong> here. Ollama runs in its own container and is never exposed to the internet.</>,
+    ],
+    env: "COMPOSE_PROFILES=ollama\nLLM_PROVIDER=ollama\nOLLAMA_BASE_URL=http://ollama:11434\nOLLAMA_MODEL=qwen3.5:4b",
+  },
+  {
+    id: "cloud",
+    title: "Ollama Cloud",
+    steps: [
+      <>Create an API key at <a className="text-primary underline-offset-4 hover:underline" href="https://ollama.com/settings/keys" target="_blank" rel="noreferrer">ollama.com/settings/keys</a>.</>,
+      <>Add these lines to <code>.env</code>, then paste the key after <code>OLLAMA_API_KEY=</code> in the file itself.</>,
+      <>Restart the app. There is nothing to download. The free plan answers one request at a time.</>,
+    ],
+    env: "LLM_PROVIDER=ollama\nOLLAMA_BASE_URL=https://ollama.com\nOLLAMA_MODEL=gpt-oss:120b\n# your key goes after the = (in .env only)\nOLLAMA_API_KEY=",
+  },
+];
+
+function CopyBlock({ text, label }: { text: string; label: string }) {
+  const toast = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: "Copied", tone: "success" });
+    } catch {
+      toast({ title: "Copy blocked by the browser", description: "Select the text and copy it instead.", tone: "error" });
+    }
+  };
+  return (
+    <div className="relative">
+      <pre className="overflow-x-auto border border-border bg-muted p-3 pr-12 font-mono text-xs leading-relaxed">{text}</pre>
+      <Button size="icon" variant="outline" className="absolute right-2 top-2 h-7 w-7" aria-label={`Copy ${label}`} onClick={copy}><Copy /></Button>
+    </div>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="label-caps text-muted-foreground">{label}</p>
+      <p className="mt-1 break-words font-medium">{children}</p>
+    </div>
+  );
+}
+
+function AIModelCard({ integ, refresh }: { integ: Integrations; refresh: () => Promise<unknown> }) {
+  const toast = useToast();
+  const { llm } = integ;
+  const ollama = llm.ollama;
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<LLMTestResult | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [pull, setPull] = useState<OllamaPullProgress | null>(ollama.pull);
+  const [setup, setSetup] = useState(ollama.cloud ? "cloud" : "mac");
+  const pulling = pull?.status === "pulling";
+
+  useEffect(() => {  // a download started earlier (another tab, before a reload) keeps showing
+    if (ollama.pull?.status === "pulling") setPull(ollama.pull);
+  }, [ollama.pull]);
+
+  useEffect(() => {
+    if (!pulling) return;
+    let stopped = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api<OllamaPullProgress>("/users/me/integrations/ollama/pull");
+        if (stopped) return;
+        setPull(next);
+        if (next.status === "success") {
+          toast({ title: `Downloaded ${next.model}`, tone: "success" });
+          void refresh();
+        } else if (next.status === "error") {
+          toast({ title: "Download failed", description: next.error ?? undefined, tone: "error" });
+        }
+      } catch {
+        /* a missed poll is fine: the next one catches up */
+      }
+    }, 1500);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [pulling, refresh, toast]);
+
+  const startPull = async () => {
+    setStarting(true);
+    try {
+      setPull(await post<OllamaPullProgress>("/users/me/integrations/ollama/pull"));
+    } catch (err) {
+      toast({ title: "Could not start the download", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      setResult(await post<LLMTestResult>("/users/me/integrations/llm/test"));
+    } catch (err) {
+      setResult({ ok: false, provider: llm.provider, model: llm.model, latency_ms: 0, error: err instanceof ApiError ? err.message : String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const showOllama = ollama.configured || ollama.reachable || llm.embedding_provider === "ollama";
+  const canDownload = ollama.configured && ollama.reachable && !ollama.cloud && ollama.model_pulled === false;
+  const chosen = OLLAMA_SETUPS.find((s) => s.id === setup) ?? OLLAMA_SETUPS[0];
+  const fallbacks = llm.providers.slice(1).map(providerLabel).join(", ");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Cpu className="h-4 w-4" /> AI model</CardTitle>
+        <CardDescription>
+          Scores jobs, tailors your resume, writes cover letters and answers questions. API keys live only in <code>.env</code> on the
+          machine running the app. This page never asks for them or shows them.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5 text-sm">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Fact label="Provider">{providerLabel(llm.provider)}</Fact>
+          <Fact label="Model"><span className="font-mono text-[13px]">{llm.model ?? "built-in heuristics"}</span></Fact>
+          <Fact label="Fallback">{fallbacks || "none"}</Fact>
+        </div>
+        {!llm.provider && (
+          <div className="flex items-start gap-2 text-muted-foreground">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <p>
+              No AI model is set up, so every step runs on built-in heuristics (it works, at lower quality). Add a Claude key to{" "}
+              <code>.env</code> or run a free model with Ollama, as shown below.
+            </p>
+          </div>
+        )}
+
+        {showOllama && (
+          <div className="space-y-3 border-t border-border/70 pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="label-caps mr-1">Ollama</span>
+              {ollama.reachable
+                ? <Badge tone="success">Reachable{ollama.version ? ` · v${ollama.version}` : ""}</Badge>
+                : <Badge tone="danger">Not reachable</Badge>}
+              {ollama.cloud && <Badge tone="info">Cloud</Badge>}
+              {ollama.model && ollama.model_pulled === true && <Badge tone="success">{ollama.cloud ? "Model available" : "Model downloaded"}</Badge>}
+              {ollama.model && ollama.model_pulled === false && <Badge tone="warning">{ollama.cloud ? "Model not offered" : "Model not downloaded"}</Badge>}
+            </div>
+            <p className="break-words text-xs text-muted-foreground">
+              <span className="font-mono">{ollama.base_url}</span>
+              {ollama.model && <> · model <span className="font-mono">{ollama.model}</span></>}
+              {!ollama.configured && ollama.reachable && <> · running, but the app isn&apos;t set up to use it yet (see below)</>}
+            </p>
+            {ollama.configured && ollama.error && (
+              <p className="flex items-start gap-2 text-xs text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {ollama.error}</p>
+            )}
+            {canDownload && !pulling && (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button size="sm" onClick={startPull} loading={starting}><Download /> Download model</Button>
+                <span className="text-xs text-muted-foreground">One-time download of {ollama.model}; a few GB, so it can take a while.</span>
+              </div>
+            )}
+            {pull && pull.status !== "idle" && (
+              <div className="space-y-1.5" aria-live="polite">
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                  <span className="label-caps">
+                    {pull.status === "error" ? "Download failed" : pull.status === "success" ? `Downloaded ${pull.model}` : `Downloading ${pull.model}`}
+                  </span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {pull.total ? `${formatBytes(pull.completed)} of ${formatBytes(pull.total)} · ${pull.percent}%` : pull.detail}
+                  </span>
+                </div>
+                <Progress value={pull.percent} aria-label="Model download progress" />
+                {pulling && pull.detail && <p className="text-xs text-muted-foreground">{pull.detail}</p>}
+                {pull.error && <p className="text-xs text-primary">{pull.error}</p>}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-3 border-t border-border/70 pt-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="outline" size="sm" onClick={runTest} loading={testing}><Zap /> Test AI</Button>
+            {testing && (
+              <span className="text-xs text-muted-foreground">
+                Asking the model… On a server without a GPU the first answer can take a minute or two while the model loads.
+              </span>
+            )}
+          </div>
+          {result && (
+            <div className={cn("border p-3", result.ok ? "border-success/60" : "border-primary/60")} role="status">
+              <p className="flex flex-wrap items-center gap-2 font-medium">
+                {result.ok ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-primary" />}
+                {result.ok ? `Answered in ${(result.latency_ms / 1000).toFixed(1)} s` : "The AI didn't answer"}
+                {result.provider && (
+                  <span className="font-normal text-muted-foreground">· {providerLabel(result.provider)}{result.model ? ` · ${result.model}` : ""}</span>
+                )}
+              </p>
+              {result.sample && <p className="mt-2 italic">&ldquo;{result.sample}&rdquo;</p>}
+              {result.error && <p className="mt-2 break-words text-muted-foreground">{result.error}</p>}
+              {result.hint && <p className="mt-2 text-xs"><span className="label-caps mr-2 text-primary">Fix</span>{result.hint}</p>}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3 border-t border-border/70 pt-4">
+          <div>
+            <p className="label-caps">How to set it up: free AI with Ollama</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ollama runs open models on your own computer or server, for free. It&apos;s slower than Claude and its written answers
+              are plainer, and you review every application before it&apos;s sent anyway.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {OLLAMA_SETUPS.map((s) => (
+              <button key={s.id} type="button" className={pill(setup === s.id)} aria-pressed={setup === s.id} onClick={() => setSetup(s.id)}>{s.title}</button>
+            ))}
+          </div>
+          <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+            {chosen.steps.map((step, i) => <li key={i}>{step}</li>)}
+          </ol>
+          <CopyBlock text={chosen.env} label=".env lines" />
+          <p className="text-xs text-muted-foreground">
+            Keys go only in <code>.env</code> on the machine that runs the app: never in this page, a chat or a command line. Restart the app
+            after editing <code>.env</code>, then press <strong>Test AI</strong>.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function IntegrationsPanel() {
   const { data: integ, mutate } = useIntegrations();
   const { data: me, mutate: mutateMe } = useMe();
@@ -456,6 +712,8 @@ function IntegrationsPanel() {
 
   return (
     <div className="space-y-6">
+      <AIModelCard integ={integ} refresh={mutate} />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Mail className="h-4 w-4" /> Google — Gmail & Calendar</CardTitle>
@@ -511,11 +769,13 @@ function IntegrationsPanel() {
                 <Input readOnly aria-label="Extension token" value={token.token} className="font-mono text-xs" />
                 <Button size="icon" variant="outline" aria-label="Copy token" onClick={() => { navigator.clipboard.writeText(token.token); toast({ title: "Copied", tone: "success" }); }}><Copy /></Button>
               </div>
-              <p className="text-xs text-muted-foreground">This token can only sync your LinkedIn session. It expires in 180 days.</p>
+              <p className="text-xs text-muted-foreground">This token can only sync your LinkedIn and Internshala sessions. It expires in 180 days.</p>
             </div>
           )}
         </CardContent>
       </Card>
+
+      <InternshalaCard status={integ.internshala} onChange={mutate} />
 
       <Card>
         <CardHeader>
@@ -562,7 +822,7 @@ function IntegrationsPanel() {
       <Card>
         <CardHeader><CardTitle>Agent capabilities</CardTitle><CardDescription>Server-side configuration (set via environment variables).</CardDescription></CardHeader>
         <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-          <p>AI model: <span className="font-medium">{integ.llm.model || (integ.llm.providers.length ? integ.llm.providers.join(", ") : "not configured — using built-in heuristics")}</span></p>
+          <p>AI model: <span className="font-medium">{integ.llm.provider ? `${providerLabel(integ.llm.provider)}${integ.llm.model ? ` · ${integ.llm.model}` : ""}` : "not configured — using built-in heuristics"}</span></p>
           <p>Embeddings: <span className="font-medium">{integ.llm.embedding_provider}</span></p>
           <p>Residential proxies: <span className="font-medium">{integ.automation.proxies || "none"}</span></p>
           <p>CAPTCHA solver: <span className="font-medium">{integ.automation.captcha ? "configured" : "not configured"}</span></p>
@@ -571,6 +831,92 @@ function IntegrationsPanel() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** The opt-in Internshala apply bot: your synced Internshala login, a session check and the bot's switches. */
+function InternshalaCard({ status, onChange }: { status: Integrations["internshala"]; onChange: () => Promise<unknown> }) {
+  const { data: me, mutate: mutateMe } = useMe();
+  const { saving, run } = useSaver();
+  const toast = useToast();
+  const [checking, setChecking] = useState(false);
+  const [warning, setWarning] = useState(false);
+  const [form, setForm] = useState({ bot: false, auto: false, limit: 15 });
+  useEffect(() => {
+    if (me) setForm({ bot: !!me.preferences.internshala_bot_enabled, auto: !!me.preferences.internshala_auto_submit,
+      limit: me.preferences.internshala_daily_limit ?? 15 });
+  }, [me]);
+  const save = (next: typeof form) => run(async () => {
+    const limit = Math.min(25, Math.max(1, Math.round(next.limit) || 15)); // 1-25 a day
+    setForm({ ...next, limit });
+    await put("/users/me/preferences", { preferences: {
+      internshala_bot_enabled: next.bot, internshala_auto_submit: next.bot && next.auto, internshala_daily_limit: limit } });
+    await Promise.all([mutateMe(), onChange()]);
+  }, next.bot ? "Internshala bot settings saved" : "Internshala bot turned off");
+  const check = async () => {
+    setChecking(true);
+    try {
+      const { session_valid } = await post<{ session_valid: boolean }>("/users/me/integrations/internshala/check");
+      toast(session_valid
+        ? { title: "Your Internshala login works", tone: "success" }
+        : { title: "Internshala session expired", description: "Open Internshala in Chrome and click Sync in the extension.", tone: "error" });
+      await onChange();
+    } catch (err) {
+      toast({ title: "Could not check the session", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Bot className="h-4 w-4" /> Internshala — apply bot</CardTitle>
+        <CardDescription>Optional. The agent fills Internshala applications with your own Internshala login (synced by the same Chrome extension) and sends them when you click Submit.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {status.connected ? (
+          <p className="flex items-center gap-2">
+            {status.session_valid ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+            {status.session_valid ? "Login synced from the extension" : "Session expired — open Internshala in Chrome and click Sync in the extension"} · {timeAgo(status.updated_at)}
+          </p>
+        ) : <p className="text-muted-foreground">Not connected. Log into Internshala in Chrome, then click “Sync Internshala session” in the extension.</p>}
+        {status.connected && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" loading={checking} onClick={check}><RefreshCw /> Check session</Button>
+            <Button variant="ghost" size="sm" onClick={() => run(async () => { await del("/users/me/integrations/internshala"); await onChange(); }, "Internshala disconnected")}>Disconnect</Button>
+          </div>
+        )}
+        <Row label="Let the agent apply on Internshala" hint="Off by default. When on, Internshala jobs you keep are filled in a real browser with your login, and wait for your click unless you turn on Submit automatically.">
+          <Switch checked={form.bot} label="Let the agent apply on Internshala"
+            onCheckedChange={(on) => (on ? setWarning(true) : save({ ...form, bot: false, auto: false }))} />
+        </Row>
+        <Row label="Submit automatically" hint="Off: every filled Internshala application waits for your Submit click. On: Internshala jobs you keep in Swipe Review are sent as soon as they're filled; anything the agent is unsure about still waits for you.">
+          <Switch checked={form.bot && form.auto} disabled={!form.bot} label="Submit Internshala applications automatically"
+            onCheckedChange={(on) => setForm({ ...form, auto: on })} />
+        </Row>
+        <Row label="Daily limit" hint="At most this many Internshala applications a day (1–25), a minute or more apart. Extra approved ones go out the next day.">
+          <Input type="number" min={1} max={25} className="max-w-[8rem]" value={form.limit} disabled={!form.bot}
+            onChange={(e) => setForm({ ...form, limit: e.target.value === "" ? 15 : Number(e.target.value) })} />
+        </Row>
+        <div className="pt-2"><Button onClick={() => save(form)} loading={saving} disabled={!form.bot}><Save /> Save Internshala settings</Button></div>
+      </CardContent>
+      <Modal open={warning} onOpenChange={setWarning} title="Let the agent apply on Internshala?" description="Read this before you turn it on."
+        footer={<>
+          <Button variant="ghost" onClick={() => setWarning(false)}>Cancel</Button>
+          <Button loading={saving} onClick={async () => { if (await save({ ...form, bot: true })) setWarning(false); }}>I understand, turn it on</Button>
+        </>}>
+        <div className="space-y-3 text-sm">
+          <p className="label-caps text-primary">Your Internshala account is at risk</p>
+          <p>Internshala&apos;s terms don&apos;t allow automated access, and Internshala can restrict or suspend accounts it believes are automated. You use this at your own risk.</p>
+          <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+            <li>The agent applies slowly: at most {form.limit} applications a day, a minute or more apart.</li>
+            <li>You review every application before it&apos;s sent, unless you turn on Submit automatically.</li>
+            <li>External listings and internships you already applied to are never sent; they&apos;re marked for you.</li>
+            <li>You can turn it off here at any time.</li>
+          </ul>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 

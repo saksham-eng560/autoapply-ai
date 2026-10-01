@@ -22,6 +22,10 @@ os.environ.update(
         "SECRET_KEY": "test-secret-key-that-is-long-enough-1234567890",
         "ANTHROPIC_API_KEY": "",
         "OPENAI_API_KEY": "",
+        "LLM_PROVIDER": "auto",
+        "OLLAMA_MODEL": "",  # Ollama stays off unless a test configures it
+        "OLLAMA_API_KEY": "",
+        "EMBEDDING_PROVIDER": "local",
         "GOOGLE_CLIENT_ID": "",
         "GOOGLE_CLIENT_SECRET": "",
         "SMTP_HOST": "",

@@ -34,7 +34,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -52,7 +52,7 @@ from app.services.application_service import set_status
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
-from app.services.llm import get_llm
+from app.services.llm import get_llm, llm_budget
 from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
@@ -468,8 +468,10 @@ def score_applications(db: Session, user: User, apps: list[Application], master:
             progress.scored += 1
             progress.tick()
 
-    llm_count = settings.MAX_LLM_EVALUATIONS_PER_SCAN
-    parallel = master is not None and get_llm().available and settings.SCAN_LLM_CONCURRENCY > 1
+    # With a local model (Ollama) first, llm_budget() lowers both numbers. Even one call at a time goes
+    # through the pool below, so the long tail gets its instant score while the LLM works.
+    concurrency, llm_count = llm_budget()
+    parallel = master is not None and get_llm().available
     if not parallel:
         for idx, app in enumerate(apps):
             use_llm = idx < llm_count
@@ -498,7 +500,7 @@ def score_applications(db: Session, user: User, apps: list[Application], master:
         else:
             advance()
     checkpoint(db)  # no write lock is held while the LLM works
-    pool = ThreadPoolExecutor(max_workers=max(1, min(settings.SCAN_LLM_CONCURRENCY, len(to_llm))),
+    pool = ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(to_llm))),
                               thread_name_prefix="scan-score")
     futures = {pool.submit(evaluate_match, master.parsed_content, snap, prefs, threshold, use_llm=True): (app, heads_up)
                for app, heads_up, snap in to_llm}
@@ -808,7 +810,7 @@ def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | No
     """Kept jobs go straight to submission when nothing needs a human; everything else waits for review."""
     from app.worker.dispatch import enqueue
 
-    if app.auto_submit and app.review_decision == "keep" and not (app.job.raw_data or {}).get("apply_on_site"):
+    if app.auto_submit and app.review_decision == "keep" and _may_auto_submit(user, app):
         blockers = unanswered_questions(app, trust_generated=bool(user.prefs.get("trust_generated_answers", True)))
         if not app.needs_manual_review and not blockers:
             set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved when you kept it in Swipe Review")
@@ -820,6 +822,113 @@ def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | No
             run.log("Needs your review before submitting: "
                     + (app.manual_review_reason or f"{len(blockers)} question(s) need an answer"))
     _mark_ready(db, user, app)
+
+
+INTERNSHALA_BLOCKER = ("Turn on the Internshala bot in Settings and sync your Internshala login with the browser "
+                       "extension — or apply yourself and click “I Applied”.")
+INTERNSHALA_RECHECK_SECONDS = 50 * 60  # over the daily limit: look again later (it goes out the next day)
+
+
+def is_internshala_job(job: Job) -> bool:
+    return ((job.raw_data or {}).get("listing_source") == "internshala"
+            or "internshala.com/" in (job.application_url or job.source_url or ""))
+
+
+def internshala_ready(user: User) -> bool:
+    """The opt-in Internshala bot is on and holds a working Internshala login."""
+    return bool(user.prefs.get("internshala_bot_enabled") and user.internshala_session and user.internshala_session_valid)
+
+
+def _may_auto_submit(user: User, app: Application) -> bool:
+    """Sites that take applications only from your own account are never sent without your click,
+    except Internshala with the bot and "Submit automatically" turned on."""
+    if is_internshala_job(app.job):
+        return internshala_ready(user) and bool(user.prefs.get("internshala_auto_submit"))
+    return not (app.job.raw_data or {}).get("apply_on_site")
+
+
+def internshala_submitted_today(db: Session, user: User) -> int:
+    """Internshala applications the agent sent today (UTC), for ``internshala_daily_limit``."""
+    from app.models.application import ApplicationStatusHistory as History
+
+    start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(db.scalar(
+        select(func.count()).select_from(History)
+        .join(Application, Application.id == History.application_id).join(Job, Job.id == Application.job_id)
+        .where(Application.user_id == user.id, History.new_status == ApplicationStatus.APPLIED,
+               History.changed_by == "agent", History.created_at >= start,
+               or_(Job.source_url.like("%internshala.com/%"), Job.application_url.like("%internshala.com/%")))
+    ) or 0)
+
+
+def _internshala_over_limit(db: Session, user: User) -> str | None:
+    limit = max(1, min(25, int(user.prefs.get("internshala_daily_limit") or 15)))
+    done = internshala_submitted_today(db, user)
+    return f"Daily Internshala limit reached ({done}/{limit}); it goes out tomorrow" if done >= limit else None
+
+
+def _internshala_session_expired(db: Session, user: User) -> None:
+    user.internshala_session_valid = False
+    notify(db, user, "session_expired", "Internshala session expired",
+           "Internshala session expired — open Internshala in Chrome and click Sync in the extension.",
+           link="/dashboard/settings?tab=integrations")
+
+
+def _internshala_already_applied(db: Session, user: User, app: Application, run: RunLog | None, by_agent: bool) -> None:
+    """Internshala shows "Already Applied": track it as applied instead of failing."""
+    note = "Internshala shows this internship as already applied"
+    app.needs_manual_review = False
+    app.manual_review_reason = None
+    if by_agent:  # an earlier attempt of ours went through without a confirmation
+        set_status(db, app, ApplicationStatus.APPLIED, "agent", note)
+        notify(db, user, "application_submitted", f"✅ Applied: {app.job.role_title} @ {app.job.company_name}",
+               "Internshala confirms your application was sent.", link=f"/dashboard/applications/{app.id}")
+    else:
+        mark_self_applied(db, user, app, note=f"{note}; tracking it from now on")
+    if run:
+        run.log(note)
+
+
+def direct_submit_blocker(user: User, app: Application) -> str | None:
+    """Why the agent can't submit this application itself (None = your one click submits it).
+
+    Boards like Internshala only take applications from your own logged-in account; Internshala
+    can, once you turn on its bot and sync your login.
+    """
+    if is_internshala_job(app.job):
+        if not internshala_ready(user):
+            return INTERNSHALA_BLOCKER
+        if not app.form_fields:  # prepared while the bot was off: the real form hasn't been read yet
+            return INTERNSHALA_FILLING
+        return None
+    site = (app.job.raw_data or {}).get("apply_on_site")
+    if site:
+        return f"{site} needs your own {site} login: apply there, then click “I Applied”."
+    return None
+
+
+INTERNSHALA_FILLING = ("The Internshala bot is filling in this form now — check back in a minute or two, "
+                      "then review every answer before you submit.")
+
+
+def restage_internshala_waiting(db: Session, user: User) -> int:
+    """Internshala applications prepared while the bot was off get their real form filled once it's on,
+    so you review what will actually be sent (never submit a form nobody has seen)."""
+    from app.worker.dispatch import enqueue
+
+    if not internshala_ready(user):
+        return 0
+    waiting = db.scalars(select(Application).where(Application.user_id == user.id,
+                                                   Application.status == ApplicationStatus.PENDING_APPROVAL)).all()
+    count = 0
+    for app in waiting:
+        if is_internshala_job(app.job) and not app.form_fields:
+            app.needs_manual_review = False
+            app.manual_review_reason = None
+            set_status(db, app, ApplicationStatus.PREPARING, "agent", "Filling the Internshala form with the bot")
+            enqueue("stage_application", str(app.id), after_commit=db)
+            count += 1
+    return count
 
 
 def _mark_ready(db: Session, user: User, app: Application) -> None:
@@ -885,9 +994,12 @@ def build_packet(db: Session, user: User, app: Application, resume_path: str | N
         resolve_answers=resolver,
         ats_credentials=credentials,
         linkedin_cookie=user.linkedin_session_cookie,
+        internshala_session=user.internshala_session if is_internshala_job(job) else None,
         application_url=job.application_url or job.source_url,
         company_name=job.company_name,
         role_title=job.role_title,
+        # Your corrections from the "Ready to submit" queue beat everything the agent worked out
+        overrides={str(k): "" if v is None else str(v) for k, v in (app.field_overrides or {}).items()},
     )
 
 
@@ -898,7 +1010,7 @@ def _resume_filename(user: User, ext: str = ".pdf") -> str:
 
 def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> Any:
     from app.services.pdf_generator import render_cover_letter_pdf
-    from app.submitters import get_submitter
+    from app.submitters import InternshalaSubmitter, get_submitter
 
     storage = get_storage()
     if not app.tailored_resume_pdf_url:
@@ -909,7 +1021,8 @@ def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> A
     pdf = storage.read(app.tailored_resume_pdf_url)
     ext = os.path.splitext(app.tailored_resume_pdf_url)[1].lower() or ".pdf"  # your original may be a .docx
     cover_pdf = render_cover_letter_pdf(app.cover_letter, {"name": user.full_name, "email": user.email}) if app.cover_letter else None
-    submitter = get_submitter(app.ats_platform or application_platform(app.job))
+    submitter = (InternshalaSubmitter() if is_internshala_job(app.job)
+                 else get_submitter(app.ats_platform or application_platform(app.job)))
     with _temp_file(pdf, ext, _resume_filename(user, ext)) as resume_path:
         if cover_pdf:
             with _temp_file(cover_pdf, ".pdf", "Cover_Letter.pdf") as cover_path:
@@ -932,8 +1045,13 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     """Fill the form and take a screenshot WITHOUT submitting, then wait for approval."""
     app = db.get(Application, uuid.UUID(str(application_id)))
     user = db.get(User, app.user_id)
-    site = (app.job.raw_data or {}).get("apply_on_site")
-    if site:  # boards like Internshala only take applications from your own logged-in account
+    internshala = is_internshala_job(app.job)
+    site = (app.job.raw_data or {}).get("apply_on_site") or ("Internshala" if internshala else None)
+    # Boards like Internshala only take applications from your own logged-in account (the opt-in
+    # Internshala bot can, with the login the extension syncs: then the form is filled like any other).
+    # Any Internshala posting counts, however it was added (e.g. "Add job by URL"), so the bot never
+    # opens your account while it's off.
+    if site and not (internshala and internshala_ready(user)):
         app.auto_submit = False
         app.needs_manual_review = True
         app.manual_review_reason = (f"{site} needs your own {site} login: open the application form, apply there, "
@@ -947,7 +1065,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     checkpoint(db)
     for attempt in (1, 2):  # rule #10: retry once
         result = _run_submitter(db, user, app, submit=False)
-        if result.success or result.session_expired:
+        if result.success or result.session_expired or result.stage != "failed":  # e.g. already applied: final
             break
         if run:
             run.log(f"Staging attempt {attempt} failed: {result.error}", level="warning")
@@ -956,19 +1074,25 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
         if run:
             run.log(f"Form filled, but the job is now {app.status.value.replace('_', ' ')}; leaving it as is")
         return app
+    if result.stage == "already_applied":
+        _internshala_already_applied(db, user, app, run, by_agent=False)
+        return app
     if result.screenshot:
         app.form_screenshot_url = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
     app.form_fields = result.fields
     if result.answers:
         app.custom_answers = _merge_answers(app.custom_answers, result.answers)
     app.staged_at = datetime.now(UTC)
-    if result.session_expired:
+    if result.session_expired and is_internshala_job(app.job):
+        _internshala_session_expired(db, user)
+    elif result.session_expired:
         user.linkedin_session_valid = False
         notify(db, user, "session_expired", "LinkedIn session expired",
                "Re-sync your LinkedIn session from the browser extension to use Easy Apply.", link="/dashboard/settings")
     if not result.success:
         app.needs_manual_review = True
-        app.manual_review_reason = f"Automatic form filling failed: {result.error}. You can still apply manually."
+        app.manual_review_reason = (result.error if result.stage == "unavailable"  # closed / external / profile gate
+                                    else f"Automatic form filling failed: {result.error}. You can still apply manually.")
         app.error_log = f"{datetime.now(UTC).isoformat()} stage: {result.error}"
     else:
         app.needs_manual_review = result.needs_manual_review
@@ -983,7 +1107,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
 
 # --------------------------------------------------------------------------- approval & submission
 def approve_application(db: Session, app: Application, cover_letter: str | None = None,
-                        custom_answers: list[dict[str, Any]] | None = None) -> Application:
+                        custom_answers: list[dict[str, Any]] | None = None, note: str = "Approved by user") -> Application:
     if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED, ApplicationStatus.MATCHED):
         raise ValueError(f"Cannot approve an application in status '{app.status.value}'")
     if cover_letter is not None:
@@ -992,7 +1116,7 @@ def approve_application(db: Session, app: Application, cover_letter: str | None 
         app.custom_answers = [{**a, "needs_user_review": False, "source": a.get("source") or "user"} for a in custom_answers]
         remember_answers(db, app.user_id, custom_answers)
     app.retry_count = 0
-    set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved by user")
+    set_status(db, app, ApplicationStatus.APPROVED, "user", note)
     from app.worker.dispatch import enqueue
 
     db.flush()
@@ -1045,14 +1169,23 @@ def submit_application(db: Session, application_id: str) -> Application:
         logger.warning("Refusing to submit application %s in status %s", app.id, app.status)
         return app
     user = db.get(User, app.user_id)
-    platform = (app.ats_platform or ATSPlatform.UNKNOWN).value
+    blocker = direct_submit_blocker(user, app)
+    if blocker:  # e.g. the Internshala bot was turned off, or its login expired, after you approved
+        app.needs_manual_review = True
+        app.manual_review_reason = blocker
+        set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", blocker)
+        return app
+    internshala = is_internshala_job(app.job)
+    platform = "internshala" if internshala else (app.ats_platform or ATSPlatform.UNKNOWN).value
     allowed, reason = rate_limiter.can_apply(str(user.id), platform, int(user.prefs.get("max_applications_per_day") or 25))
+    wait = int(rate_limiter.cooldown_seconds(platform)) + 30
+    if allowed and internshala and (reason := _internshala_over_limit(db, user)):
+        allowed, wait = False, INTERNSHALA_RECHECK_SECONDS
     if not allowed:
         app.notes = f"Waiting: {reason}"
         from app.worker.dispatch import enqueue
 
-        enqueue("submit_application", str(app.id), countdown=int(rate_limiter.cooldown_seconds(platform)) + 30,
-                after_commit=db)
+        enqueue("submit_application", str(app.id), countdown=wait, after_commit=db)
         return app
 
     run = RunLog(db, user, "apply", "user")
@@ -1084,13 +1217,24 @@ def submit_application(db: Session, application_id: str) -> Application:
         run.finish("completed")
         return app
 
+    if result.stage == "already_applied":
+        _internshala_already_applied(db, user, app, run, by_agent=bool(app.retry_count))
+        run.finish("completed")
+        return app
     app.retry_count = (app.retry_count or 0) + 1
     app.error_log = f"{datetime.now(UTC).isoformat()} submit: {result.error}"
     run.log(f"Submission failed: {result.error}", level="error")
+    if result.session_expired and internshala:  # back to your review queue; Submit works again after a re-sync
+        _internshala_session_expired(db, user)
+        app.needs_manual_review = True
+        app.manual_review_reason = "Internshala session expired — open Internshala in Chrome, click Sync in the extension, then submit again."
+        set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", "Internshala session expired")
+        run.finish("failed")
+        return app
     if result.session_expired:
         notify(db, user, "session_expired", "LinkedIn session expired",
                "Re-sync your LinkedIn session to finish this Easy Apply.", link="/dashboard/settings")
-    if app.retry_count <= 1 and not result.session_expired:
+    if app.retry_count <= 1 and not result.session_expired and result.stage == "failed":
         run.log("Retrying once")
         run.finish("failed")
         from app.worker.dispatch import enqueue

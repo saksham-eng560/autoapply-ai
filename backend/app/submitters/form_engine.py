@@ -215,8 +215,10 @@ def classify_field(f: FormField) -> str | None:
 _DATE_HINT = re.compile(r"date|\bdob\b|birth|start|graduat|available|joining|from|until|\bto\b", re.I)
 
 
-def parse_when(text: str, today: date | None = None) -> date | None:
-    """'2027-06-01', 'June 2027', '15/06/2027', 'immediately', '2 weeks' -> a date."""
+def parse_when(text: str, today: date | None = None, day_first: bool = True) -> date | None:
+    """'2027-06-01', 'June 2027', '15/06/2027', 'immediately', '2 weeks' -> a date.
+
+    An ambiguous '01/02/2004' is read day first (1 Feb) unless ``day_first`` is False (US forms)."""
     today = today or datetime.now(UTC).date()
     t = normalize_text(text)
     if not t:
@@ -227,9 +229,9 @@ def parse_when(text: str, today: date | None = None) -> date | None:
     if m and not re.search(r"\d{4}", t):
         return today + timedelta(days=int(m.group(1)) * {"d": 1, "w": 7, "m": 30}[m.group(2)[0]])
     m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", t)
-    if m:  # 15/06/2027: day first when it can't be a month
+    if m:  # 15/06/2027 can only be day first; 06/15/2027 only month first; otherwise follow day_first
         a, b, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        day, month = (a, b) if a > 12 else (b, a)
+        day, month = (a, b) if a > 12 or (day_first and b <= 12) else (b, a)
         try:
             return date(year, month, day)
         except ValueError:
@@ -269,10 +271,14 @@ def coerce_value(f: FormField, value: Any) -> str | None:
             return None
         return {"month": d.strftime("%Y-%m"), "datetime-local": f"{d.isoformat()}T09:00"}.get(f.type, d.isoformat())
     if f.type in ("text", "textarea") and f.placeholder and _DATE_HINT.search(f.label or f.name):
-        d = parse_when(text) if re.search(r"\d|immediate|asap|week|month|day", text, re.I) else None
-        formatted = _format_like(d, f.placeholder) if d else None
-        if formatted:
-            text = formatted
+        month_first = bool(re.search(r"mm\W?dd\W?yyyy", f.placeholder.lower()))
+        already = re.fullmatch(r"\d{1,2}[/.-]\d{1,2}[/.-]\d{4}", text) and re.search(r"(dd|mm)\W?(dd|mm)\W?yyyy",
+                                                                                     f.placeholder.lower())
+        if not already:  # a date already written the way the box asks for is typed as is
+            d = parse_when(text, day_first=not month_first) if re.search(r"\d|immediate|asap|week|month|day", text, re.I) else None
+            formatted = _format_like(d, f.placeholder) if d else None
+            if formatted:
+                text = formatted
     if f.max_length and len(text) > f.max_length:
         text = clip(text, f.max_length)
     return text

@@ -179,3 +179,17 @@ def test_rate_limiter_limits() -> None:
     assert not ok and "Daily application limit" in reason
     rate_limiter.pause_platform("indeed", 60)
     assert rate_limiter.is_paused("indeed") and not rate_limiter.allow_request("indeed")
+
+
+def test_stipend_and_currency_are_never_mixed_up() -> None:
+    """A monthly stipend isn't your yearly salary, and a ₹ question never gets a $ figure."""
+    qs = [{"question": "What is your expected stipend per month (in INR)?", "field_type": "number"},
+          {"question": "Expected CTC (INR)"}, {"question": "Desired salary?"}]
+    usd = {"salary_min": 150000, "salary_currency": "USD"}
+    by_q = {a["question"]: a for a in answer_questions(qs, RESUME, usd, {}, use_llm=False)}
+    assert by_q[qs[0]["question"]]["answer"] == "" and by_q[qs[0]["question"]]["needs_user_review"]
+    assert by_q["Expected CTC (INR)"]["answer"] == "" and by_q["Desired salary?"]["answer"] == "150000"
+    by_q = {a["question"]: a for a in answer_questions(qs, RESUME, usd, {"expected_stipend": "15000"}, use_llm=False)}
+    assert by_q[qs[0]["question"]]["answer"] == "15000" and not by_q[qs[0]["question"]]["needs_user_review"]
+    inr = {"salary_min": 600000, "salary_currency": "INR"}
+    assert answer_questions([qs[1]], RESUME, inr, {}, use_llm=False)[0]["answer"] == "600000"
