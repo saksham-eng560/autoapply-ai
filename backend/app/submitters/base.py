@@ -70,6 +70,7 @@ class CandidatePacket:
     resolve_answers: AnswerResolver | None = None
     ats_credentials: dict[str, Any] = field(default_factory=dict)
     linkedin_cookie: str | None = None
+    internshala_session: list[dict[str, Any]] | None = None  # cookies synced by the extension
     application_url: str = ""
     company_name: str = ""
     role_title: str = ""

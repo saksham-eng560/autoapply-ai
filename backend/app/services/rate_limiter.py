@@ -27,7 +27,7 @@ PLATFORM_LIMITS: dict[str, PlatformLimit] = {
     "workday": PlatformLimit(50, 10, (300, 600)),
     "glassdoor": PlatformLimit(100, 20, (120, 240)),
     "wellfound": PlatformLimit(100, 20, (60, 180)),
-    "internshala": PlatformLimit(120, 25, (60, 180)),  # discovery; you apply on Internshala yourself
+    "internshala": PlatformLimit(120, 25, (60, 180)),  # discovery + the opt-in apply bot (also internshala_daily_limit)
 }
 DEFAULT_LIMIT = PlatformLimit(100, 20, (60, 180))
 RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60  # pause a platform for 15 min after HTTP 429

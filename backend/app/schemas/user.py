@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
@@ -49,6 +49,26 @@ class ATSCredentialsUpdate(BaseModel):
 class LinkedInCookieIn(BaseModel):
     li_at: str = Field(min_length=10, max_length=4000)
     profile_url: str | None = None
+
+
+class InternshalaCookieIn(BaseModel):
+    """One cookie as Chrome's ``chrome.cookies`` API reports it (field names kept as Chrome spells them)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(min_length=1, max_length=256)
+    value: str = Field(default="", max_length=4096)
+    domain: str = Field(min_length=1, max_length=255)
+    path: str = Field(default="/", max_length=1024)
+    secure: bool = False
+    http_only: bool = Field(default=False, alias="httpOnly")
+    same_site: str | None = Field(default=None, alias="sameSite", max_length=32)
+    expiration_date: float | None = Field(default=None, alias="expirationDate")
+    host_only: bool | None = Field(default=None, alias="hostOnly")
+
+
+class InternshalaSessionIn(BaseModel):
+    cookies: list[InternshalaCookieIn] = Field(min_length=1, max_length=60)
 
 
 class DeleteAccountRequest(BaseModel):

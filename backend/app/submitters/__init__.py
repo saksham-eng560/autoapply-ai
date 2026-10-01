@@ -6,6 +6,7 @@ from app.models.enums import ATSPlatform
 from app.submitters.base import BaseSubmitter, CandidatePacket, SessionExpired, SubmissionError, SubmissionResult
 from app.submitters.generic_submit import GenericSubmitter
 from app.submitters.greenhouse_submit import GreenhouseSubmitter
+from app.submitters.internshala_apply import InternshalaSubmitter
 from app.submitters.lever_submit import LeverSubmitter
 from app.submitters.linkedin_easy_apply import LinkedInEasyApplySubmitter
 from app.submitters.workday_submit import WorkdaySubmitter
@@ -25,6 +26,7 @@ def get_submitter(platform: ATSPlatform) -> BaseSubmitter:
 __all__ = [
     "BaseSubmitter",
     "CandidatePacket",
+    "InternshalaSubmitter",
     "SessionExpired",
     "SubmissionError",
     "SubmissionResult",

@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, cloneElement, isValidElement, useEffect, useId, useState } from "react";
 import useSWR from "swr";
-import { AlertTriangle, CheckCircle2, Copy, Cpu, Download, KeyRound, Link2, Mail, Puzzle, Save, Trash2, Zap } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Copy, Cpu, Download, KeyRound, Link2, Mail, Puzzle, RefreshCw, Save, Trash2, Zap } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { TagInput } from "@/components/tag-input";
 import { Badge } from "@/components/ui/badge";
@@ -214,7 +214,7 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
           <Row label="Company careers pages" hint="Any careers page — the agent reads JSON-LD job postings and follows embedded ATS boards.">
             <TagInput value={prefs.sources.career_pages} onChange={(v) => setSource("career_pages", v)} placeholder="https://company.com/careers" />
           </Row>
-          <Row label="Internshala searches" hint="Optional: paste any Internshala search URL (filters and all). Without these the agent searches your roles in your prime cities, work-from-home and all of India. You apply on Internshala yourself, then click “I Applied”.">
+          <Row label="Internshala searches" hint="Optional: paste any Internshala search URL (filters and all). Without these the agent searches your roles in your prime cities, work-from-home and all of India. Apply on Internshala yourself and click “I Applied”, or turn on the Internshala bot in Integrations.">
             <TagInput value={prefs.sources.internshala_urls || []} onChange={(v) => setSource("internshala_urls", v)} placeholder="https://internshala.com/internships/python-django-internship-in-delhi/" />
           </Row>
           <div className="pt-4"><Button onClick={save} loading={saving}><Save /> Save sources</Button></div>
@@ -767,11 +767,13 @@ function IntegrationsPanel() {
                 <Input readOnly aria-label="Extension token" value={token.token} className="font-mono text-xs" />
                 <Button size="icon" variant="outline" aria-label="Copy token" onClick={() => { navigator.clipboard.writeText(token.token); toast({ title: "Copied", tone: "success" }); }}><Copy /></Button>
               </div>
-              <p className="text-xs text-muted-foreground">This token can only sync your LinkedIn session. It expires in 180 days.</p>
+              <p className="text-xs text-muted-foreground">This token can only sync your LinkedIn and Internshala sessions. It expires in 180 days.</p>
             </div>
           )}
         </CardContent>
       </Card>
+
+      <InternshalaCard status={integ.internshala} onChange={mutate} />
 
       <Card>
         <CardHeader>
@@ -827,6 +829,90 @@ function IntegrationsPanel() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** The opt-in Internshala apply bot: your synced Internshala login, a session check and the bot's switches. */
+function InternshalaCard({ status, onChange }: { status: Integrations["internshala"]; onChange: () => Promise<unknown> }) {
+  const { data: me, mutate: mutateMe } = useMe();
+  const { saving, run } = useSaver();
+  const toast = useToast();
+  const [checking, setChecking] = useState(false);
+  const [warning, setWarning] = useState(false);
+  const [form, setForm] = useState({ bot: false, auto: false, limit: 15 });
+  useEffect(() => {
+    if (me) setForm({ bot: !!me.preferences.internshala_bot_enabled, auto: !!me.preferences.internshala_auto_submit,
+      limit: me.preferences.internshala_daily_limit ?? 15 });
+  }, [me]);
+  const save = (next: typeof form) => run(async () => {
+    await put("/users/me/preferences", { preferences: {
+      internshala_bot_enabled: next.bot, internshala_auto_submit: next.bot && next.auto, internshala_daily_limit: next.limit } });
+    await Promise.all([mutateMe(), onChange()]);
+  }, next.bot ? "Internshala bot settings saved" : "Internshala bot turned off");
+  const check = async () => {
+    setChecking(true);
+    try {
+      const { session_valid } = await post<{ session_valid: boolean }>("/users/me/integrations/internshala/check");
+      toast(session_valid
+        ? { title: "Your Internshala login works", tone: "success" }
+        : { title: "Internshala session expired", description: "Open Internshala in Chrome and click Sync in the extension.", tone: "error" });
+      await onChange();
+    } catch (err) {
+      toast({ title: "Could not check the session", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Bot className="h-4 w-4" /> Internshala — apply bot</CardTitle>
+        <CardDescription>Optional. The agent fills Internshala applications with your own Internshala login (synced by the same Chrome extension) and sends them when you click Submit.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {status.connected ? (
+          <p className="flex items-center gap-2">
+            {status.session_valid ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+            {status.session_valid ? "Login synced from the extension" : "Session expired — open Internshala in Chrome and click Sync in the extension"} · {timeAgo(status.updated_at)}
+          </p>
+        ) : <p className="text-muted-foreground">Not connected. Log into Internshala in Chrome, then click “Sync Internshala session” in the extension.</p>}
+        {status.connected && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" loading={checking} onClick={check}><RefreshCw /> Check session</Button>
+            <Button variant="ghost" size="sm" onClick={() => run(async () => { await del("/users/me/integrations/internshala"); await onChange(); }, "Internshala disconnected")}>Disconnect</Button>
+          </div>
+        )}
+        <Row label="Let the agent apply on Internshala" hint="Off by default. When on, Internshala jobs you keep are filled in a real browser with your login, and wait for your click unless you turn on Submit automatically.">
+          <Switch checked={form.bot} label="Let the agent apply on Internshala"
+            onCheckedChange={(on) => (on ? setWarning(true) : save({ ...form, bot: false, auto: false }))} />
+        </Row>
+        <Row label="Submit automatically" hint="Off: every filled Internshala application waits for your Submit click. On: Internshala jobs you keep in Swipe Review are sent as soon as they're filled; anything the agent is unsure about still waits for you.">
+          <Switch checked={form.bot && form.auto} disabled={!form.bot} label="Submit Internshala applications automatically"
+            onCheckedChange={(on) => setForm({ ...form, auto: on })} />
+        </Row>
+        <Row label="Daily limit" hint="At most this many Internshala applications a day (1–25), a minute or more apart. Extra approved ones go out the next day.">
+          <Input type="number" min={1} max={25} className="max-w-[8rem]" value={form.limit} disabled={!form.bot}
+            onChange={(e) => setForm({ ...form, limit: Number(e.target.value) })} />
+        </Row>
+        <div className="pt-2"><Button onClick={() => save(form)} loading={saving} disabled={!form.bot}><Save /> Save Internshala settings</Button></div>
+      </CardContent>
+      <Modal open={warning} onOpenChange={setWarning} title="Let the agent apply on Internshala?" description="Read this before you turn it on."
+        footer={<>
+          <Button variant="ghost" onClick={() => setWarning(false)}>Cancel</Button>
+          <Button loading={saving} onClick={async () => { if (await save({ ...form, bot: true })) setWarning(false); }}>I understand, turn it on</Button>
+        </>}>
+        <div className="space-y-3 text-sm">
+          <p className="label-caps text-primary">Your Internshala account is at risk</p>
+          <p>Internshala&apos;s terms don&apos;t allow automated access, and Internshala can restrict or suspend accounts it believes are automated. You use this at your own risk.</p>
+          <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+            <li>The agent applies slowly: at most {form.limit} applications a day, a minute or more apart.</li>
+            <li>You review every application before it&apos;s sent, unless you turn on Submit automatically.</li>
+            <li>External listings and internships you already applied to are never sent; they&apos;re marked for you.</li>
+            <li>You can turn it off here at any time.</li>
+          </ul>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 
