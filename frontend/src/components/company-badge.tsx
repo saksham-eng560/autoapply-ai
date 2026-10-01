@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useSWRConfig } from "swr";
-import { ShieldAlert, ShieldCheck, ShieldQuestion, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
+import { GraduationCap, ShieldAlert, ShieldCheck, ShieldQuestion, ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/components/ui/toast";
@@ -109,6 +109,16 @@ export function CompanyTag({ check, className }: { check?: CompanyCheck | null; 
       <span className={cn("label-caps inline-flex items-center gap-1 border px-1 text-[9px]", look.tone)} title={check?.reasons?.join("\n")}>
         <Icon className="h-2.5 w-2.5" aria-hidden /> {look.label}
       </span>
+    </span>
+  );
+}
+
+/** "Open to 2nd-year students": the posting names your year of study (Google STEP, "1st and 2nd year students"). */
+export function YearFitTag({ label, className }: { label?: string | null; className?: string }) {
+  if (!label) return null;
+  return (
+    <span className={cn("label-caps inline-flex items-center gap-1 border border-success/60 px-1.5 py-0.5 text-[10px] text-success", className)}>
+      <GraduationCap className="h-3 w-3" aria-hidden /> {label}
     </span>
   );
 }

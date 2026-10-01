@@ -53,6 +53,7 @@ from app.services.application_service import set_status
 from app.services.company_verifier import SUSPICIOUS, UNVERIFIED, CompanyCheck, check_job, is_trusted, verify_with_llm
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
+from app.services.intern_level import drop_ineligible, intern_level_reasons, internships_only, student, with_resume
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
 from app.services.llm import get_llm, llm_budget
 from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
@@ -203,6 +204,36 @@ def skip_suspicious_waiting(db: Session, user: User) -> int:
         set_status(db, app, ApplicationStatus.SKIPPED, "agent", app.match_reasoning)
         skipped += 1
     return skipped
+
+
+def skip_ineligible_waiting(db: Session, user: User) -> int:
+    """Jobs waiting in Swipe Review that aren't internships for you (full-time, new grad, final-year-only, PhD-only...)
+    are skipped, with the reason."""
+    prefs = user.prefs
+    if not internships_only(prefs):
+        return 0
+    waiting = db.scalars(
+        select(Application).join(Job, Job.id == Application.job_id)
+        .where(Application.user_id == user.id,
+               Application.status.in_((ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED)),
+               Application.review_decision.is_(None))).all()
+    if not waiting:
+        return 0
+    master = get_master_resume(db, user)
+    prefs = with_resume(prefs, master.parsed_content if master else None)
+    skipped = 0
+    for app in waiting:
+        reasons = intern_level_reasons(app.job, prefs)
+        if reasons:
+            app.match_reasoning = reasons[0]
+            set_status(db, app, ApplicationStatus.SKIPPED, "agent", reasons[0])
+            skipped += 1
+    return skipped
+
+
+def student_label(prefs: dict[str, Any]) -> str:
+    year = student(prefs).year
+    return f"a {('1st', '2nd', '3rd', '4th', '5th')[year - 1]}-year student" if year else "a student"
 
 
 def verify_companies(db: Session, jobs: list[Job], run: RunLog | None = None, progress: ScanProgress | None = None) -> int:
@@ -367,6 +398,13 @@ def discover_jobs(query: SearchQuery, platforms: list[str], run: RunLog | None =
     return list(unique.values())
 
 
+def user_source_urls(db: Session, user: User, contains: str) -> frozenset[str]:
+    """Source URLs (containing ``contains``) of the postings you already have."""
+    rows = db.scalars(select(Job.source_url).join(Application, Application.job_id == Job.id)
+                      .where(Application.user_id == user.id, Job.source_url.contains(contains))).all()
+    return frozenset(rows)
+
+
 def known_source_urls(db: Session, days: int = 30) -> frozenset[str]:
     """Postings from sites with slow detail pages that are already saved (with a full description)."""
     since = datetime.now(UTC) - timedelta(days=days)
@@ -395,7 +433,7 @@ def is_swipe_mode(prefs: dict[str, Any]) -> bool:
 def _precheck(db: Session, user: User, app: Application, master: Resume | None) -> tuple[bool, list[str]]:
     """Cheap checks before scoring. Returns (needs_scoring, heads_up)."""
     job = app.job
-    prefs = user.prefs
+    prefs = with_resume(user.prefs, master.parsed_content if master else None)  # your graduation year
     swipe = is_swipe_mode(prefs)
     keep, reason = prefilter(job, prefs, strict=not swipe)
     if not keep:
@@ -471,18 +509,24 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         master = get_master_resume(db, user)
         query = SearchQuery.from_preferences(prefs, limit=int(prefs.get("max_jobs_per_source") or settings.MAX_JOBS_PER_SOURCE))
         query = dataclasses.replace(query, known_urls=known_source_urls(db))
-        run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}")
+        run.log(f"Scanning {', '.join(chosen)} for {', '.join(query.keywords) or 'all roles'}"
+                + (" (internships only)" if query.internships_only else ""))
         progress.set_phase("discovering", f"Searching {len(progress.sources)} job sources at once")
         scraped = discover_jobs(query, chosen, run, progress=progress, tick=progress.tick)
+        scraped, not_for_you = drop_ineligible(scraped, with_resume(prefs, master.parsed_content if master else None))
+        if not_for_you:
+            run.log(f"Interns only: left out {not_for_you} posting{'s' if not_for_you != 1 else ''} that aren't "
+                    f"internships for {student_label(prefs)} (full-time roles, PhD / MBA-only, final-year-only...)")
         if query.focus is not None:
             scraped, dropped = balance_by_location(scraped, query.focus)
             if dropped:
                 run.log(f"Location focus: kept ~{query.focus.share}% of postings in {query.focus.country.title()} "
                         f"({dropped} from elsewhere left out this scan)")
-        scraped, capped = cap_internshala(scraped, prefs.get("internshala_share"), query.focus)
+        scraped, capped = cap_internshala(scraped, prefs.get("internshala_share"), query.focus,
+                                          prefs.get("internshala_per_scan"), user_source_urls(db, user, "internshala.com/"))
         if capped:
-            run.log(f"Internshala: kept at most {prefs.get('internshala_share', 25)}% of this scan's postings, the best "
-                    f"ones ({capped} more left out)")
+            run.log(f"Internshala: kept the best {prefs.get('internshala_per_scan', 10)} new postings at most "
+                    f"(and at most {prefs.get('internshala_share', 25)}% of the scan); {capped} more left out")
         progress.found = len(scraped)
         progress.to_save = len(scraped)
         progress.set_phase("saving", f"Saving {len(scraped)} postings")

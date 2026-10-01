@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import anyio
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,6 +17,7 @@ from app.models.job import Job
 from app.schemas.job import JobImportRequest
 from app.scrapers import ScraperError
 from app.services import agent_orchestrator as orch
+from app.services import intern_level
 from app.services.application_service import set_status
 from app.services.company_catalog import CATALOG, TIERS, normalize_company
 from app.worker.dispatch import enqueue
@@ -77,25 +80,28 @@ def top_companies(user: CurrentUser, db: DB, tier: str | None = None, q: str | N
     if tier and tier not in TIERS:
         raise HTTPException(422, "Unknown tier")
     orch.backfill_company_checks(db)
-    base = (select(Job, Application)
-            .join(Application, and_(Application.job_id == Job.id, Application.user_id == user.id))
-            .where(Job.is_active.is_(True), Job.company_tier.is_not(None)))
-    counts = dict(db.execute(select(Job.company_tier, func.count()).select_from(Job)
-                             .join(Application, and_(Application.job_id == Job.id, Application.user_id == user.id))
-                             .where(Job.is_active.is_(True), Job.company_tier.is_not(None))
-                             .group_by(Job.company_tier)).all())
-    if tier:
-        base = base.where(Job.company_tier == tier)
-    if q:
-        like = f"%{q.lower()}%"
-        base = base.where(or_(func.lower(Job.role_title).like(like), func.lower(Job.company_name).like(like),
-                              func.lower(Job.location).like(like)))
-    rows = db.execute(base.order_by(Application.match_score.desc().nulls_last(), Job.discovered_at.desc()).limit(limit)).all()
+    orch.skip_ineligible_waiting(db, user)
     prefs = user.prefs
+    master = orch.get_master_resume(db, user)
+    checked = intern_level.with_resume(prefs, master.parsed_content if master else None)
+    rows = db.execute(select(Job, Application)
+                      .join(Application, and_(Application.job_id == Job.id, Application.user_id == user.id))
+                      .where(Job.is_active.is_(True), Job.company_tier.is_not(None))
+                      .order_by(Application.match_score.desc().nulls_last(), Job.discovered_at.desc())
+                      .limit(5000)).all()
+    # Internships for you only: no full-time roles, nothing only for final-year / PhD / MBA students
+    rows = [(job, app) for job, app in rows if not intern_level.intern_level_reasons(job, checked)]
+    counts = Counter(job.company_tier for job, _ in rows)
+    if tier:
+        rows = [(job, app) for job, app in rows if job.company_tier == tier]
+    if q:
+        needle = q.lower()
+        rows = [(job, app) for job, app in rows
+                if any(needle in (value or "").lower() for value in (job.role_title, job.company_name, job.location))]
     return {
         "tiers": [{"key": key, "label": label, "count": counts.get(key, 0)} for key, label in TIERS.items()],
         "total": sum(counts.values()),
-        "items": [job_out(job, app, prefs) for job, app in rows],
+        "items": [job_out(job, app, prefs) for job, app in rows[:limit]],
         "catalog": {key: [c.name for c in CATALOG if c.tier == key] for key in TIERS},
         "scan_top_companies": bool(prefs.get("scan_top_companies", True)),
     }

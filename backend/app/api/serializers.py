@@ -16,6 +16,7 @@ from app.models.job import Job
 from app.models.resume import Resume
 from app.models.user import Notification, User
 from app.services.company_verifier import summary as company_summary
+from app.services.intern_level import year_fit
 
 
 def iso(value: datetime | date | None) -> str | None:
@@ -78,6 +79,7 @@ def job_out(job: Job, application: Application | None = None, prefs: dict[str, A
         "discovered_at": iso(job.discovered_at),
         "is_active": job.is_active,
         "company": company_summary(job, prefs),
+        "year_fit": year_fit(job, prefs),  # "Open to 2nd-year students" when the posting names your year
     }
     if application is not None:
         out["application"] = {

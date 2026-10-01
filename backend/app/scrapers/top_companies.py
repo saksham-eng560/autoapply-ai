@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import re
 
 from app.models.enums import ATSPlatform
 from app.scrapers.ashby import AshbyScraper
@@ -22,16 +21,11 @@ from app.scrapers.lever import LeverScraper
 from app.scrapers.linkedin import LinkedInScraper
 from app.scrapers.workday import WorkdayScraper
 from app.services.company_catalog import CATALOG, Company, match_company
+from app.services.intern_level import is_internship
 
 logger = logging.getLogger(__name__)
 
-INTERNSHIP = re.compile(r"\b(intern|interns|internship|co-?op|apprentice(ship)?|trainee|summer (analyst|associate|"
-                        r"engineer|student)|student (researcher|engineer|developer))\b", re.I)
 LINKEDIN_PER_COMPANY = 8  # one results page per company: enough, and kind to LinkedIn's rate limits
-
-
-def is_internship(title: str) -> bool:
-    return bool(INTERNSHIP.search(title or ""))
 
 
 def tasks() -> list[str]:
@@ -54,7 +48,7 @@ class TopCompaniesScraper(BaseScraper):
     def _keep(self, jobs: list[ScrapedJob], query: SearchQuery, company: Company | None) -> list[ScrapedJob]:
         out = []
         for job in self.filter(jobs, query):
-            if not is_internship(job.role_title):
+            if not is_internship(job.role_title):  # an intern title, whatever the site calls the job type
                 continue
             if company is not None:
                 job.raw = {**(job.raw or {}), "top_company": company.name, "company_tier": company.tier}

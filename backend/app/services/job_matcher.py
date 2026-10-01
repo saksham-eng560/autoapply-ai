@@ -10,6 +10,7 @@ from typing import Any
 from app.models.job import Job
 from app.schemas.resume_content import ResumeContent
 from app.services import llm_schemas
+from app.services.intern_level import intern_level_reasons, internships_only
 from app.services.llm import LLMError, get_llm, render_prompt
 from app.services.location_focus import (
     TIER_ABROAD,
@@ -115,7 +116,9 @@ def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str
             break
 
     job_types = [t for t in (prefs.get("job_types") or []) if t]
-    if job_types and job.job_type is not None and job.job_type.value not in job_types:
+    if internships_only(prefs):  # intern roles only, and only ones open to your year of study
+        hard.extend(intern_level_reasons(job, prefs))
+    elif job_types and job.job_type is not None and job.job_type.value not in job_types:
         hard.append(f"Job type {job.job_type.value} not in preferences")
 
     if job.deadline_date and job.deadline_date < datetime.now(UTC).date():

@@ -41,6 +41,14 @@ export interface Preferences {
   notification_popups?: boolean;
   /** At most this % of each scan's new postings come from Internshala (default 25). */
   internshala_share?: number;
+  /** And never more than this many new Internshala postings a scan (default 10). */
+  internshala_per_scan?: number;
+  /** Intern roles only, at every company (default on): no full-time, new-grad or contract jobs. */
+  internships_only?: boolean;
+  /** 1–5, null = any year: internships only for other years (final-year only, PhD / MBA only...) are skipped. */
+  year_of_study?: number | null;
+  /** null = read from your resume (else estimated from your year of study). */
+  graduation_year?: number | null;
   skip_suspicious_companies?: boolean;
   /** Companies you marked legit: applied to automatically like verified ones. */
   trusted_companies?: string[];
@@ -124,6 +132,16 @@ export interface Job {
   application?: JobApplicationRef;
   /** The company-check agent: only verified companies are applied to automatically. */
   company?: CompanyCheck;
+  /** "Open to 2nd-year students" when the posting names your year of study. */
+  year_fit?: string | null;
+}
+
+/** Your year of study and graduation year as the intern-level filter sees them. */
+export interface StudentInfo {
+  internships_only: boolean;
+  year_of_study: number | null;
+  graduation_year: number | null;
+  graduation_year_source: "you" | "resume" | "estimate" | "";
 }
 
 export type CompanyVerdict = "verified" | "unverified" | "suspicious";

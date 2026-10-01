@@ -120,7 +120,7 @@ def test_season_filter_in_matching() -> None:
     assert not hard and soft == ["Starts immediately (you're targeting Summer 2027)"]
     # Only internships are held to the season; full-time roles you opt into are not
     assert prefilter(job(role_title="Engineer 2026", job_type=JobType.FULL_TIME),
-                     {**prefs, "job_types": ["full-time"]}, strict=False)[0]
+                     {**prefs, "job_types": ["full-time"], "internships_only": False}, strict=False)[0]
 
 
 def test_review_queue_delhi_first_then_india(auth_client: TestClient) -> None:

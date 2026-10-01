@@ -18,6 +18,7 @@ import httpx
 from app.automation.browser import USER_AGENTS
 from app.config import settings
 from app.models.enums import ATSPlatform, ExperienceLevel, JobType
+from app.services.intern_level import internships_only, is_internship
 from app.services.location_focus import LocationFocus, get_focus, location_tier
 from app.services.rate_limiter import rate_limiter
 from app.services.text_utils import html_to_text, normalize_text
@@ -46,6 +47,7 @@ class SearchQuery:
     # titles are still matched against ``keywords``.
     search_terms: list[str] | None = None
     focus: LocationFocus | None = None  # e.g. India with Delhi NCR first (see services/location_focus.py)
+    internships_only: bool = False  # drop every posting that isn't an internship (services/intern_level.py)
     # Postings already in the database: scrapers skip re-downloading their detail pages.
     known_urls: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
     # Called as progress(done, total) while a scraper works through boards / pages (scan progress bar).
@@ -74,11 +76,13 @@ class SearchQuery:
             prime = (prefs.get("location_focus") or {}).get("prime_cities") or []
             country = str((prefs.get("location_focus") or {}).get("country") or "").strip()
             locations = [f"{prime[0]}, {country}", country] if prime else [country]
+        only_interns = internships_only(prefs)
         return cls(
             keywords=[k for k in prefs.get("target_roles") or [] if k],
             locations=locations,
             remote=(prefs.get("remote_preference") == "remote"),
-            job_types=prefs.get("job_types") or [],
+            job_types=["internship"] if only_interns else prefs.get("job_types") or [],
+            internships_only=only_interns,
             posted_within_days=int(prefs.get("posted_within_days") or 14),
             limit=limit,
             sources=prefs.get("sources") or {},
@@ -336,6 +340,8 @@ class BaseScraper(ABC):
         cutoff = datetime.now(UTC).date() - timedelta(days=query.posted_within_days or 3650)
         out = []
         for job in jobs:
+            if query.internships_only and not is_internship(job.role_title, job.job_type):
+                continue  # a full-time / new-grad / contract job
             if not query.matches_title(job.role_title):
                 continue
             if query.remote and not job.is_remote:

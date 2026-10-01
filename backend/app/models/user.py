@@ -31,6 +31,10 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "max_applications_per_day": 25,
     "auto_apply_threshold": 80,
     "job_types": ["internship"],  # internships only for now; add "full-time" to widen
+    # --- Intern level (services/intern_level.py) ---
+    "internships_only": True,  # intern roles only, at every company: no full-time, new-grad or contract jobs
+    "year_of_study": 2,        # 1-5 (None = any): skips "final-year only", "rising seniors", PhD / MBA-only internships
+    "graduation_year": None,   # None = read from your resume's education (else estimated from your year)
     "notification_channels": ["email", "dashboard"],
     "notification_popups": True,  # off: no pop-ups in the dashboard or the OS; notifications still collect in the bell
     # --- Extended settings ---
@@ -68,6 +72,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "internshala_auto_submit": False,  # send them without your click (otherwise they wait for you)
     "internshala_daily_limit": 15,     # at most this many Internshala applications a day (1-25)
     "internshala_share": 25,           # at most this % of each scan's new postings come from Internshala (0-100)
+    "internshala_per_scan": 10,        # and never more than this many new Internshala postings per scan (0-50)
     # --- Company check (services/company_verifier.py) ---
     "skip_suspicious_companies": True,  # postings with scam signs (fees, WhatsApp-only, MLM...) are skipped
     "trusted_companies": [],            # companies you marked legit: applied to automatically like verified ones

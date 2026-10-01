@@ -90,6 +90,7 @@ def apply_preset(prefs: dict[str, Any], name: str) -> dict[str, Any]:
             "target_roles": intern_roles(current.get("target_roles")),
             "job_types": ["internship"],
             "experience_level": ["internship"],
+            "internships_only": True,
             "internship_season": "Summer 2027",
             "location_focus": copy.deepcopy(DEFAULT_PREFERENCES["location_focus"]),
             "target_locations": ["Delhi, India", "India"],
@@ -102,14 +103,16 @@ def apply_preset(prefs: dict[str, Any], name: str) -> dict[str, Any]:
             "target_roles": intern_roles(current.get("target_roles")),
             "job_types": ["internship"],
             "experience_level": ["internship", "entry"],
+            "internships_only": True,
         })
     elif name == "new-grad":
         sources["internship_lists"] = _union(sources.get("internship_lists"), ["simplify-new-grad"])
         update.update({
             "job_types": ["full-time"],
             "experience_level": ["entry"],
+            "internships_only": False,  # the one preset for full-time jobs
         })
-    else:  # startups: keep your roles and job types, add the startup boards
+    elif not current.get("internships_only", True):  # startups: keep your roles and job types, add the boards
         update["job_types"] = _union(current.get("job_types"), ["internship", "full-time"])
     update["sources"] = sources
     return merge_preferences(current, update)

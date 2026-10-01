@@ -11,7 +11,7 @@ from tests.conftest import SAMPLE_RESUME_TEXT
 
 MASTER = heuristic_parse(SAMPLE_RESUME_TEXT)
 PREFS = {"target_roles": ["Backend Engineer", "Software Engineer"], "target_locations": ["San Francisco"],
-         "remote_preference": "hybrid", "salary_min": 120000, "job_types": ["full-time"], "companies_to_avoid": ["Evil Corp"],
+         "remote_preference": "hybrid", "salary_min": 120000, "job_types": ["full-time"], "internships_only": False, "companies_to_avoid": ["Evil Corp"],
          "auto_apply_threshold": 60}
 
 

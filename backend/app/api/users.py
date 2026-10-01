@@ -25,6 +25,7 @@ from app.schemas.user import (
     ProfileUpdate,
 )
 from app.services import agent_orchestrator as orch
+from app.services import intern_level
 from app.services.ai_setup import PullError, connection_test, llm_section, pull_progress, start_pull
 from app.services.google_oauth import has_scope
 from app.services.location_focus import get_season
@@ -57,6 +58,15 @@ def get_preferences(user: CurrentUser) -> dict:
     return user.prefs
 
 
+@router.get("/student")
+def get_student(user: CurrentUser, db: DB) -> dict:
+    """Your year of study and graduation year as the intern-level filter sees them (and where the year came from)."""
+    master = orch.get_master_resume(db, user)
+    info = intern_level.student(user.prefs, master.parsed_content if master else None)
+    return {"internships_only": intern_level.internships_only(user.prefs), "year_of_study": info.year,
+            "graduation_year": info.graduation_year, "graduation_year_source": info.source}
+
+
 def _validate_focus(prefs: dict) -> None:  # type: ignore[type-arg]
     focus = prefs.get("location_focus")
     if focus is not None:
@@ -87,7 +97,16 @@ def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
     share = prefs.get("internshala_share")
     if not isinstance(share, int) or isinstance(share, bool) or not 0 <= share <= 100:
         raise HTTPException(422, "internshala_share must be 0-100")
-    for key in ("skip_suspicious_companies", "scan_top_companies"):
+    per_scan = prefs.get("internshala_per_scan")
+    if not isinstance(per_scan, int) or isinstance(per_scan, bool) or not 0 <= per_scan <= 50:
+        raise HTTPException(422, "internshala_per_scan must be 0-50")
+    year = prefs.get("year_of_study")
+    if year is not None and (not isinstance(year, int) or isinstance(year, bool) or not 1 <= year <= 5):
+        raise HTTPException(422, "year_of_study must be 1-5 (or empty for any year)")
+    grad = prefs.get("graduation_year")
+    if grad is not None and (not isinstance(grad, int) or isinstance(grad, bool) or not 2000 <= grad <= 2100):
+        raise HTTPException(422, "graduation_year must be a year like 2029 (or empty)")
+    for key in ("skip_suspicious_companies", "scan_top_companies", "internships_only"):
         if not isinstance(prefs.get(key), bool):
             raise HTTPException(422, f"{key} must be true or false")
     trusted = prefs.get("trusted_companies")

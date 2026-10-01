@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 import { ArrowUpRight, Building2, Check, Crown, MapPin, Radar, Search } from "lucide-react";
-import { CompanyBadge } from "@/components/company-badge";
+import { CompanyBadge, YearFitTag } from "@/components/company-badge";
 import { EmptyState } from "@/components/empty-state";
 import { JobMatchBadge } from "@/components/job-match-badge";
 import { PageHeader } from "@/components/page-header";
@@ -51,6 +51,7 @@ function JobRow({ job, onChanged }: { job: Job; onChanged: () => void }) {
         <p className="flex flex-wrap items-center gap-x-2 text-sm">
           <span className="inline-flex items-center gap-1.5 font-semibold"><Building2 className="h-4 w-4" />{job.company_name}</span>
           <CompanyBadge company={job.company_name} check={job.company} />
+          <YearFitTag label={job.year_fit} />
         </p>
         <p className="mt-1 break-words font-display text-lg leading-tight">{job.role_title}</p>
         <p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
