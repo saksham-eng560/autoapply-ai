@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -46,6 +47,8 @@ COVER_LETTER = ("Dear Hiring Manager,\n\nI am excited to apply for the Python De
                 "I have built FastAPI services and enjoy backend work.\n\nI would love to contribute to your team.\n\n"
                 "Sincerely,\nAarav Sharma")
 GOOD = "good-session"
+# Your Chrome's navigator.userAgent (not one of the bot's own browser identities)
+MAC_CHROME = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 SESSION = [  # as the extension sends them (chrome.cookies.getAll)
     {"name": "PHPSESSID", "value": GOOD, "domain": "internshala.com", "path": "/", "secure": True, "httpOnly": True,
      "sameSite": "unspecified", "hostOnly": True},
@@ -184,6 +187,11 @@ PAGES: dict[str, str] = {
     "/student/personal_details": f"<!doctype html><html><body>{HEADER}<h2>Complete your profile to apply</h2><form><input name='city'></form></body></html>",
     "/student/dashboard": f"<!doctype html><html><body>{HEADER}<h2>Dashboard</h2></body></html>",
     "/login/student": "<!doctype html><html><body><form id='login-form'><input name='email'><input name='password' type='password'></form></body></html>",
+    # What a logged-out visitor's "Apply now" opens (the page in the bug report)
+    "/registration/student": ("<!doctype html><html><body><h1>Sign-up and apply for free</h1><p>3,00,000+ companies hiring on "
+                              "Internshala</p><div class='card'><h4>Candidate sign up</h4><button>Sign up with Google</button>"
+                              "<button>Sign up with Email</button><p>Already registered? <a href='/login/student'>Login</a></p>"
+                              "</div></body></html>"),
 }
 
 
@@ -191,6 +199,8 @@ class MockInternshala:
     def __init__(self) -> None:
         self.submissions: list[tuple[str, dict]] = []
         self.requests: list[str] = []
+        self.agents: list[str] = []  # the User-Agent of every page request
+        self.bound_ua: str | None = None  # set: the login only works from this browser (like a UA-bound session)
         site = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -209,16 +219,22 @@ class MockInternshala:
 
             def _logged_in(self) -> bool:
                 cookies = dict(p.strip().split("=", 1) for p in (self.headers.get("Cookie") or "").split(";") if "=" in p)
-                return cookies.get("PHPSESSID") == GOOD
+                ua_ok = site.bound_ua is None or self.headers.get("User-Agent") == site.bound_ua
+                return cookies.get("PHPSESSID") == GOOD and ua_ok
 
             def do_GET(self) -> None:
                 path = urlparse(self.path).path
                 site.requests.append(path)
+                site.agents.append(self.headers.get("User-Agent") or "")
                 if path.startswith("/login"):
                     return self._send(PAGES["/login/student"])
+                if path.startswith("/registration"):
+                    return self._send(PAGES["/registration/student"])
+                if path.startswith("/internship/detail/public-") and not self._logged_in():  # listings are public
+                    return self._send(_detail(f'<a class="top_apply_now_cta btn" href="/registration/student?redirect={path}">Apply now</a>'))
                 if not self._logged_in():
                     return self._send("", 302, {"Location": f"/login/student?redirect={path}"})
-                if path.startswith("/internship/detail/easy-"):
+                if path.startswith(("/internship/detail/easy-", "/internship/detail/public-")):
                     return self._send(easy_detail(path.rsplit("/", 1)[-1]))
                 if path in PAGES:
                     return self._send(PAGES[path])
@@ -243,7 +259,8 @@ class MockInternshala:
 def local_session(**kwargs: Any) -> BrowserSession:
     """A real browser whose Internshala cookies are pointed at the mock server (plain HTTP on 127.0.0.1)."""
     cookies = [{**c, "domain": "127.0.0.1", "secure": False, "sameSite": "Lax"} for c in kwargs.pop("cookies", None) or []]
-    return BrowserSession(cookies=cookies, use_proxy=False, **kwargs)
+    kwargs["use_proxy"] = False
+    return BrowserSession(cookies=cookies, **kwargs)
 
 
 @pytest.fixture
@@ -380,6 +397,39 @@ def test_logged_out_session_is_reported_as_expired(mock_site: MockInternshala) -
 
 @pytest.mark.e2e
 @needs_browser
+def test_signup_page_means_internshala_did_not_accept_the_login(mock_site: MockInternshala) -> None:
+    """Listings are public: logged out, "Apply now" opens Internshala's sign-up page. That's a login problem
+    (sync again), not "the form did not open" after a 20-second wait."""
+    stale = [{**c, "value": "stale"} if c["name"] == "PHPSESSID" else c for c in SESSION]
+    started = time.monotonic()
+    result = InternshalaSubmitter(session_factory=local_session).stage(
+        packet(f"{mock_site.base}/internship/detail/public-1", session=stale))
+    assert not result.success and result.session_expired and result.error == ia.EXPIRED
+    assert "/registration/student" in mock_site.requests and time.monotonic() - started < 15
+    assert ia.check_session(stale, base_url=mock_site.base, session_factory=local_session) is False
+    # The same listing with a login Internshala accepts: the real form
+    assert InternshalaSubmitter(session_factory=local_session).stage(
+        packet(f"{mock_site.base}/internship/detail/public-2")).success
+
+
+@pytest.mark.e2e
+@needs_browser
+def test_the_bot_presents_the_browser_your_login_came_from(mock_site: MockInternshala) -> None:
+    """Internshala can tie a login to the browser it was made in: the bot shows your Chrome's user agent."""
+    mock_site.bound_ua = MAC_CHROME
+    random_browser = InternshalaSubmitter(session_factory=local_session).stage(packet(f"{mock_site.base}/internship/detail/public-3"))
+    assert random_browser.session_expired  # what happened before: a different browser, so Internshala saw no login
+    mock_site.agents.clear()
+    yours = InternshalaSubmitter(session_factory=local_session).stage(
+        replace(packet(f"{mock_site.base}/internship/detail/public-4"), internshala_user_agent=MAC_CHROME))
+    assert yours.success and yours.stage == "staged", yours.error
+    assert mock_site.agents and set(mock_site.agents) == {MAC_CHROME}
+    assert ia.check_session(SESSION, base_url=mock_site.base, session_factory=local_session, user_agent=MAC_CHROME) is True
+    assert ia.browser_kwargs(SESSION, MAC_CHROME)["use_proxy"] is False  # your own connection, never a scraping proxy
+
+
+@pytest.mark.e2e
+@needs_browser
 def test_unanswered_required_question_is_never_submitted(mock_site: MockInternshala) -> None:
     """No cover letter and no answer engine: the form is filled as far as possible, then left for you."""
     result = InternshalaSubmitter(session_factory=local_session).submit(
@@ -466,6 +516,19 @@ def test_session_sync_validates_and_never_returns_cookie_values(auth_client: Tes
         assert {c["name"] for c in user.internshala_session} == {"PHPSESSID", "l", "csrf_cookie_name", "is_logged_in"}
         assert user.consents.get("internshala")
 
+    # The browser the login came from: kept, replaced on the next sync that sends one, never junk
+    def agent() -> str | None:
+        with SessionLocal() as db:
+            return db.query(User).filter(User.email == "jane@example.com").one().internshala_user_agent
+
+    assert agent() is None
+    assert c.post(url, json={"cookies": SESSION, "user_agent": MAC_CHROME}, headers=headers).status_code == 200
+    assert agent() == MAC_CHROME
+    assert c.post(url, json={"cookies": SESSION}, headers=headers).status_code == 200  # an older extension
+    assert agent() == MAC_CHROME
+    assert c.post(url, json={"cookies": SESSION, "user_agent": "evil\r\nX-Injected: 1"}, headers=headers).status_code == 200
+    assert agent() is None
+
     assert c.delete("/api/v1/users/me/integrations/internshala").json() == {"ok": True}
     assert c.get("/api/v1/users/me/integrations").json()["internshala"]["connected"] is False
 
@@ -474,16 +537,17 @@ def test_session_check_uses_the_probe(auth_client: TestClient, monkeypatch: pyte
     c = auth_client
     check = "/api/v1/users/me/integrations/internshala/check"
     assert c.post(check).status_code == 400  # nothing synced yet
-    c.post("/api/v1/users/me/integrations/internshala-session", json={"cookies": SESSION}, headers=_token(c))
-    seen: list[list[dict]] = []
-    monkeypatch.setattr(ia, "check_session", lambda cookies: seen.append(cookies) or False)
+    c.post("/api/v1/users/me/integrations/internshala-session", json={"cookies": SESSION, "user_agent": MAC_CHROME},
+           headers=_token(c))
+    seen: list[tuple[list[dict], dict]] = []
+    monkeypatch.setattr(ia, "check_session", lambda cookies, **kw: seen.append((cookies, kw)) or False)
     assert c.post(check).json()["session_valid"] is False
-    assert seen[0][0]["value"] == GOOD
+    assert seen[0][0][0]["value"] == GOOD and seen[0][1]["user_agent"] == MAC_CHROME  # checked as your own browser
     assert c.get("/api/v1/users/me/integrations").json()["internshala"]["session_valid"] is False
-    monkeypatch.setattr(ia, "check_session", lambda cookies: True)
+    monkeypatch.setattr(ia, "check_session", lambda cookies, **kw: True)
     assert c.post(check).json()["session_valid"] is True
 
-    def unavailable(cookies: list[dict]) -> bool:
+    def unavailable(cookies: list[dict], **kw: Any) -> bool:
         raise BrowserUnavailable("no chromium")
 
     monkeypatch.setattr(ia, "check_session", unavailable)
@@ -564,14 +628,16 @@ class Recorder:
 
 def test_blocker_is_none_only_when_the_bot_is_ready(auth_client: TestClient, master_resume: dict) -> None:
     cases = [({"filled": True}, None), ({}, orch.INTERNSHALA_FILLING),  # ready, but the real form not read yet
-             ({"bot": False}, orch.INTERNSHALA_BLOCKER), ({"session": False}, orch.INTERNSHALA_BLOCKER),
-             ({"valid": False}, orch.INTERNSHALA_BLOCKER)]
+             ({"bot": False}, orch.INTERNSHALA_MISSING["bot_off"]),
+             ({"session": False}, orch.INTERNSHALA_MISSING["not_synced"]),
+             ({"valid": False}, orch.INTERNSHALA_MISSING["expired"])]
     for kw, expected in cases:
         app_id = _setup(**kw)
         app = _app(app_id)
         user = app.user
         assert orch.direct_submit_blocker(user, app) == expected, kw
-    assert "I Applied" in orch.INTERNSHALA_BLOCKER and "extension" in orch.INTERNSHALA_BLOCKER
+    assert all("I Applied" in m for m in orch.INTERNSHALA_MISSING.values())
+    assert "Sync Internshala session" in orch.INTERNSHALA_MISSING["not_synced"]
     with SessionLocal() as db:  # other boards that need your own login keep their reason; ordinary jobs have none
         user = db.query(User).filter(User.email == "jane@example.com").one()
         other = Job(company_name="X", role_title="Y", description="z", source_url="https://board.example/1",
@@ -621,7 +687,7 @@ def test_turning_the_bot_on_fills_the_forms_prepared_while_it_was_off(auth_clien
     with run_inline(), SessionLocal() as db:
         orch.stage_application(db, app_id)
         db.commit()
-    assert rec.calls == [] and orch.direct_submit_blocker(_app(app_id).user, _app(app_id)) == orch.INTERNSHALA_BLOCKER
+    assert rec.calls == [] and orch.direct_submit_blocker(_app(app_id).user, _app(app_id)) == orch.INTERNSHALA_MISSING["bot_off"]
     with run_inline():  # you turn the bot on: the waiting application's real form is filled for you to review
         r = auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"internshala_bot_enabled": True}})
     assert r.status_code == 200, r.text
@@ -645,18 +711,20 @@ def test_staging_short_circuits_when_the_bot_is_off(auth_client: TestClient, mas
 
 def test_session_expiry_flips_the_internshala_flag(auth_client: TestClient, master_resume: dict,
                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    Recorder(monkeypatch, stage=SubmissionResult(False, "failed", error=ia.EXPIRED, session_expired=True))
+    Recorder(monkeypatch, stage=SubmissionResult(False, "failed", error=ia.EXPIRED, session_expired=True,
+                                                 screenshot=b"\x89PNG sign-up page"))
     app_id = _setup()
     with SessionLocal() as db:
         orch.stage_application(db, app_id)
         db.commit()
     app = _app(app_id)
+    assert app.form_screenshot_url is None  # Internshala's sign-up page is not shown as your "filled form"
     assert app.user.internshala_session_valid is False and app.user.linkedin_session_valid is True
     assert app.status == ApplicationStatus.PENDING_APPROVAL and app.needs_manual_review
     with SessionLocal() as db:
         note = db.query(Notification).filter(Notification.event_type == "session_expired").one()
         assert note.title == "Internshala session expired" and "Sync" in note.body
-    assert orch.direct_submit_blocker(app.user, app) == orch.INTERNSHALA_BLOCKER
+    assert orch.direct_submit_blocker(app.user, app) == orch.INTERNSHALA_MISSING["expired"]
 
 
 @pytest.mark.parametrize("auto_submit", [False, True])
@@ -715,7 +783,7 @@ def test_submit_is_refused_when_the_bot_is_off(auth_client: TestClient, master_r
         db.commit()
     app = _app(app_id)
     assert rec.calls == [] and app.status == ApplicationStatus.PENDING_APPROVAL
-    assert app.manual_review_reason == orch.INTERNSHALA_BLOCKER
+    assert app.manual_review_reason == orch.INTERNSHALA_MISSING["bot_off"]
 
 
 @pytest.mark.parametrize("when", ["stage", "submit"])
@@ -802,3 +870,46 @@ def test_disconnect_sticks_until_you_sync_yourself(auth_client: TestClient) -> N
     assert not c.get("/api/v1/users/me/integrations").json()["internshala"]["connected"]
     assert c.post(url, json={"cookies": SESSION, "reason": "manual"}, headers=headers).status_code == 200
     assert c.post(url, json={"cookies": SESSION, "reason": "scheduled"}, headers=headers).status_code == 200
+
+
+def test_apply_with_the_bot_fills_and_submits_on_one_click(auth_client: TestClient, master_resume: dict,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """"Apply with the bot": your click on one card is the approval, even with "Submit automatically" off."""
+    rec = Recorder(monkeypatch)
+    app_id = _setup(status=ApplicationStatus.PENDING_APPROVAL, auto_submit=False)
+    queue = auth_client.get("/api/v1/applications/review-queue").json()["items"]
+    assert queue[0]["bot"] == {"site": "Internshala", "missing": None}
+    with run_inline():
+        r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 202, r.text
+    assert [c[0] for c in rec.calls] == ["stage", "submit"]
+    app = _app(app_id)
+    assert app.status == ApplicationStatus.APPLIED
+    assert any("You asked the bot" in (h.notes or "") for h in app.history)
+
+
+@pytest.mark.parametrize(("kw", "missing"), [({"bot": False}, "bot_off"), ({"session": False}, "not_synced"),
+                                             ({"valid": False}, "expired")])
+def test_apply_with_the_bot_says_exactly_what_is_missing(auth_client: TestClient, master_resume: dict,
+                                                         monkeypatch: pytest.MonkeyPatch, kw: dict, missing: str) -> None:
+    rec = Recorder(monkeypatch)
+    app_id = _setup(status=ApplicationStatus.PENDING_APPROVAL, **kw)
+    assert auth_client.get("/api/v1/applications/review-queue").json()["items"][0]["bot"]["missing"] == missing
+    r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 409 and r.json()["detail"] == orch.INTERNSHALA_MISSING[missing]
+    assert rec.calls == [] and _app(app_id).status == ApplicationStatus.PENDING_APPROVAL
+
+
+def test_apply_with_the_bot_is_only_for_internshala(auth_client: TestClient, master_resume: dict) -> None:
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == "jane@example.com").one()
+        job = Job(company_name="X", role_title="Y", description="z", source_url="https://boards.greenhouse.io/x/jobs/9",
+                  source_platform=ATSPlatform.GREENHOUSE)
+        db.add(job)
+        db.flush()
+        app = Application(user_id=user.id, job_id=job.id, status=ApplicationStatus.PENDING_APPROVAL)
+        db.add(app)
+        db.commit()
+        app_id = str(app.id)
+    r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 409 and "Internshala" in r.json()["detail"]

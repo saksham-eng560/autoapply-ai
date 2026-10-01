@@ -70,6 +70,7 @@ class InternshalaCookieIn(BaseModel):
 class InternshalaSessionIn(BaseModel):
     cookies: list[InternshalaCookieIn] = Field(min_length=1, max_length=60)
     reason: str = Field(default="manual", max_length=20)  # manual | scheduled | cookie-changed (extension)
+    user_agent: str | None = Field(default=None, max_length=512)  # the browser the login belongs to
 
 
 class DeleteAccountRequest(BaseModel):

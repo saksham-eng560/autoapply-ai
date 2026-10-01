@@ -128,6 +128,8 @@ class User(Base):
     internshala_session: Mapped[list[dict[str, Any]] | None] = mapped_column(EncryptedJSON)
     internshala_session_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     internshala_session_valid: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # The browser those cookies belong to: the bot presents the same one (sites may tie a login to it)
+    internshala_user_agent: Mapped[str | None] = mapped_column(String(512))
 
     # Per-ATS login credentials (e.g. Workday tenant accounts), encrypted JSON
     ats_credentials: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)

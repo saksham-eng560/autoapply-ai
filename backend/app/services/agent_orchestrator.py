@@ -824,8 +824,6 @@ def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | No
     _mark_ready(db, user, app)
 
 
-INTERNSHALA_BLOCKER = ("Turn on the Internshala bot in Settings and sync your Internshala login with the browser "
-                       "extension — or apply yourself and click “I Applied”.")
 INTERNSHALA_RECHECK_SECONDS = 50 * 60  # over the daily limit: look again later (it goes out the next day)
 
 
@@ -841,10 +839,64 @@ def internshala_ready(user: User) -> bool:
 
 def _may_auto_submit(user: User, app: Application) -> bool:
     """Sites that take applications only from your own account are never sent without your click,
-    except Internshala with the bot and "Submit automatically" turned on."""
+    except Internshala with the bot ready and either "Submit automatically" on or your
+    "Apply with the bot" click on this application."""
     if is_internshala_job(app.job):
-        return internshala_ready(user) and bool(user.prefs.get("internshala_auto_submit"))
+        return internshala_ready(user) and bool(user.prefs.get("internshala_auto_submit") or bot_apply_requested(app))
     return not (app.job.raw_data or {}).get("apply_on_site")
+
+
+def bot_apply_requested(app: Application) -> bool:
+    return bool((app.match_details or {}).get("bot_apply_requested_at"))
+
+
+def internshala_missing(user: User) -> str | None:
+    """What the Internshala bot still needs: "bot_off", "not_synced", "expired" — or None when ready."""
+    if not user.prefs.get("internshala_bot_enabled"):
+        return "bot_off"
+    if not user.internshala_session:
+        return "not_synced"
+    if not user.internshala_session_valid:
+        return "expired"
+    return None
+
+
+INTERNSHALA_MISSING = {
+    "bot_off": "The Internshala bot is off: turn on “Let the agent apply on Internshala” in Settings › Integrations "
+               "— or apply yourself and click “I Applied”.",
+    "not_synced": "The Internshala bot is on, but your Internshala login isn't synced yet: log into internshala.com in "
+                  "Chrome, open the AutoApply extension and click “Sync Internshala session” — or apply yourself and "
+                  "click “I Applied”.",
+    "expired": "Your synced Internshala login has expired: log into internshala.com in Chrome again and click “Sync "
+               "Internshala session” in the extension — or apply yourself and click “I Applied”.",
+}
+
+
+def bot_apply(db: Session, user: User, app: Application) -> Application:
+    """Your "Apply with the bot" click: the bot fills this Internshala form and submits it by itself.
+
+    The click is your approval for this one application. If a required question has no answer the
+    bot can stand behind, it stops and the application comes back to Ready to submit with the reason.
+    """
+    from app.worker.dispatch import enqueue
+
+    if not is_internshala_job(app.job):
+        raise ValueError("“Apply with the bot” is for Internshala postings; use Submit for this one")
+    missing = internshala_missing(user)
+    if missing:
+        raise ValueError(INTERNSHALA_MISSING[missing])
+    if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED, ApplicationStatus.MATCHED,
+                          ApplicationStatus.DISCOVERED):
+        raise ValueError(f"This application is {app.status.value.replace('_', ' ')}")
+    app.match_details = {**(app.match_details or {}), "bot_apply_requested_at": datetime.now(UTC).isoformat()}
+    app.review_decision = "keep"
+    app.auto_submit = True
+    app.needs_manual_review = False
+    app.manual_review_reason = None
+    app.retry_count = 0
+    set_status(db, app, ApplicationStatus.PREPARING, "user", "You asked the bot to fill and submit this on Internshala")
+    enqueue("stage_application", str(app.id), after_commit=db)
+    return app
 
 
 def internshala_submitted_today(db: Session, user: User) -> int:
@@ -870,7 +922,9 @@ def _internshala_over_limit(db: Session, user: User) -> str | None:
 def _internshala_session_expired(db: Session, user: User) -> None:
     user.internshala_session_valid = False
     notify(db, user, "session_expired", "Internshala session expired",
-           "Internshala session expired — open Internshala in Chrome and click Sync in the extension.",
+           "Internshala showed the bot its sign-up / login page, so the synced login no longer works there. Log into "
+           "internshala.com in Chrome (log out and back in if you already are), then click “Sync Internshala "
+           "session” in the extension: the waiting applications are filled again automatically.",
            link="/dashboard/settings?tab=integrations")
 
 
@@ -896,8 +950,9 @@ def direct_submit_blocker(user: User, app: Application) -> str | None:
     can, once you turn on its bot and sync your login.
     """
     if is_internshala_job(app.job):
-        if not internshala_ready(user):
-            return INTERNSHALA_BLOCKER
+        missing = internshala_missing(user)
+        if missing:
+            return INTERNSHALA_MISSING[missing]
         if not app.form_fields:  # prepared while the bot was off: the real form hasn't been read yet
             return INTERNSHALA_FILLING
         return None
@@ -907,8 +962,8 @@ def direct_submit_blocker(user: User, app: Application) -> str | None:
     return None
 
 
-INTERNSHALA_FILLING = ("The Internshala bot is filling in this form now — check back in a minute or two, "
-                      "then review every answer before you submit.")
+INTERNSHALA_FILLING = ("The bot hasn't filled this Internshala form yet: click “Apply with the bot” and it fills the "
+                      "form and submits it for you — or apply yourself and click “I Applied”.")
 
 
 def restage_internshala_waiting(db: Session, user: User) -> int:
@@ -995,6 +1050,7 @@ def build_packet(db: Session, user: User, app: Application, resume_path: str | N
         ats_credentials=credentials,
         linkedin_cookie=user.linkedin_session_cookie,
         internshala_session=user.internshala_session if is_internshala_job(job) else None,
+        internshala_user_agent=user.internshala_user_agent if is_internshala_job(job) else None,
         application_url=job.application_url or job.source_url,
         company_name=job.company_name,
         role_title=job.role_title,
@@ -1077,7 +1133,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     if result.stage == "already_applied":
         _internshala_already_applied(db, user, app, run, by_agent=False)
         return app
-    if result.screenshot:
+    if result.screenshot and not result.session_expired:  # a login / sign-up page is not your filled form
         app.form_screenshot_url = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
     app.form_fields = result.fields
     if result.answers:

@@ -72,8 +72,10 @@ class BrowserSession:
         headless: bool | None = None,
         proxies: ProxyManager | None = None,
         timezone_id: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self.cookies = cookies
+        self.user_agent = user_agent  # present as this browser (e.g. the one a synced login belongs to)
         self.storage_state = storage_state
         self.use_proxy = use_proxy
         self.headless = settings.BROWSER_HEADLESS if headless is None else headless
@@ -109,7 +111,7 @@ class BrowserSession:
         width, height = random.choice(VIEWPORTS)
         vendor, renderer = random.choice(WEBGL)
         context_kwargs: dict[str, Any] = {
-            "user_agent": random.choice(USER_AGENTS),
+            "user_agent": self.user_agent or random.choice(USER_AGENTS),
             "viewport": {"width": width, "height": height},
             "locale": "en-US",
             "timezone_id": self.timezone_id or "America/New_York",

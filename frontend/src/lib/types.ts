@@ -291,11 +291,16 @@ export interface SubmitQueueItem extends ApplicationSummary {
   staged_at: string | null;
   /** Why the agent can't submit this one itself (e.g. an Internshala login): apply there, then "I Applied". */
   blocker: string | null;
+  /** Internshala postings: what the apply bot still needs (null when it can fill and submit this itself). */
+  bot: { site: string; missing: BotMissing | null } | null;
   apply_url: string | null;
   /** Rows needing your attention first, then the rest in form order. */
   rows: ReviewRow[];
   attention: number;
 }
+
+/** Bot switched off in Settings, login never synced from the extension, or the synced login expired. */
+export type BotMissing = "bot_off" | "not_synced" | "expired";
 
 export interface SubmitQueue {
   items: SubmitQueueItem[];

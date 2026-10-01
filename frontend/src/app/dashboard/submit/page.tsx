@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import {
-  AlertTriangle, ArrowUpRight, Building2, Check, CheckCheck, Copy, FileText, Layers, ListChecks, MapPin, Send, SkipForward,
+  AlertTriangle, ArrowUpRight, Bot, Building2, Check, CheckCheck, Copy, FileText, Layers, ListChecks, MapPin, Send, SkipForward,
   Undo2, X, ZoomIn,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
@@ -22,7 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useAgentStatus, useSubmitQueue } from "@/hooks/use-applications";
 import { ApiError, post } from "@/lib/api-client";
-import type { DirectSubmitResponse, ReviewRow, SubmitQueueItem } from "@/lib/types";
+import type { BotMissing, DirectSubmitResponse, ReviewRow, SubmitQueueItem } from "@/lib/types";
 import { PLATFORM_LABELS, cn, timeAgo, titleCase } from "@/lib/utils";
 
 type RowStatus = "pending" | "editing" | "confirmed";
@@ -37,6 +37,14 @@ const blocksConfirm = (row: ReviewRow, value: string) => row.required && !value.
 const needsYou = (row: ReviewRow, value: string) => row.flagged || blocksConfirm(row, value);
 const longText = (row: ReviewRow, value: string) => row.kind === "cover_letter" || row.type === "textarea" || value.length > 120;
 const fresh = (row: ReviewRow): RowState => ({ value: row.value, status: "pending", edited: false });
+
+/** The one step that gets the Internshala bot going (Settings › Integrations has the switch and the sync steps). */
+const BOT_FIX: Record<BotMissing, string> = {
+  bot_off: "Turn on the bot",
+  not_synced: "Sync your Internshala login",
+  expired: "Sync your Internshala login again",
+};
+const INTEGRATIONS = "/dashboard/settings?tab=integrations";
 
 function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null;
@@ -403,7 +411,28 @@ function SubmitInner() {
     }
   }, [item, allChecked, editing, busy, rows, stateOf, toast, leave, mutate]);
 
-  // Y correct · N fix · J/K move · A confirm all · Enter submit · S skip (never while typing).
+  /** "Apply with the bot": the bot fills this Internshala form and submits it, no checking needed here. */
+  const botReady = !!item?.bot && !item.bot.missing && !!item.blocker;
+  const applyWithBot = useCallback(async () => {
+    if (!item || !botReady || busy) return;
+    setBusy(true);
+    try {
+      const res = await post<DirectSubmitResponse>(`/applications/${item.id}/bot-apply`);
+      toast({
+        title: `The bot is applying to ${item.job?.company_name ?? "the company"}`,
+        description: "It fills the Internshala form with your resume and answers, then submits it. If a question needs you, it comes back here; the confirmation lands in Applications.",
+        tone: "success",
+      });
+      leave(res.next_id);
+    } catch (err) {
+      toast({ title: "The bot couldn't start", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
+      if (err instanceof ApiError && err.status === 409) void mutate();
+    } finally {
+      setBusy(false);
+    }
+  }, [item, botReady, busy, toast, leave, mutate]);
+
+  // Y correct · N fix · J/K move · A confirm all · Enter submit · S skip · B apply with the bot (never while typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!item || zoom || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
@@ -417,6 +446,7 @@ function SubmitInner() {
       else if (key === "n" && row && review) { e.preventDefault(); fix(row); }
       else if (key === "a" && review) { e.preventDefault(); confirmAll(); }
       else if (key === "s") { e.preventDefault(); skip(); }
+      else if (key === "b" && botReady && !e.repeat) { e.preventDefault(); void applyWithBot(); }
       else if (e.key === "Enter" && !e.repeat && tag !== "BUTTON" && tag !== "A" && allChecked && review) {
         e.preventDefault();
         void submit();
@@ -424,7 +454,7 @@ function SubmitInner() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [item, zoom, rows, focus, focusRow, confirm, fix, confirmAll, skip, submit, allChecked]);
+  }, [item, zoom, rows, focus, focusRow, confirm, fix, confirmAll, skip, submit, allChecked, botReady, applyWithBot]);
 
   const cardVariants: Variants = {
     enter: reduce ? { opacity: 0 } : { opacity: 0, y: 18 },
@@ -516,7 +546,12 @@ function SubmitInner() {
               {item.blocker ? (
                 <div className="flex items-start gap-3 border-b border-warning/50 bg-warning/10 px-5 py-3 text-sm sm:px-6">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                  <span>{item.blocker} Everything below is ready to copy over.</span>
+                  <span>
+                    {item.blocker} Everything below is ready to copy over.
+                    {item.bot?.missing && (
+                      <> <Link href={INTEGRATIONS} className="font-semibold underline underline-offset-2 hover:text-primary">{BOT_FIX[item.bot.missing]} →</Link></>
+                    )}
+                  </span>
                 </div>
               ) : item.needs_manual_review && item.manual_review_reason ? (
                 <p className="border-b border-line/60 px-5 py-3 text-sm text-muted-foreground sm:px-6">{item.manual_review_reason}</p>
@@ -542,7 +577,7 @@ function SubmitInner() {
           </AnimatePresence>
 
           <p className="mt-4 hidden text-center text-xs text-muted-foreground sm:block">
-            {item.blocker ? <><Kbd>J</Kbd>/<Kbd>K</Kbd> move · <Kbd>S</Kbd> skip</> : <>
+            {item.blocker ? <><Kbd>J</Kbd>/<Kbd>K</Kbd> move · <Kbd>S</Kbd> skip{botReady && <> · <Kbd>B</Kbd> apply with the bot</>}</> : <>
               <Kbd>Y</Kbd> correct · <Kbd>N</Kbd> fix · <Kbd>J</Kbd>/<Kbd>K</Kbd> move · <Kbd>A</Kbd> confirm all · <Kbd>Enter</Kbd> submit · <Kbd>S</Kbd> skip
             </>}
           </p>
@@ -551,13 +586,25 @@ function SubmitInner() {
           <div className="sticky bottom-0 z-20 -mx-4 mt-6 border-t border-line/60 bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
             {item.blocker ? (
               <div className="mx-auto grid max-w-[880px] grid-cols-2 gap-2 sm:flex sm:items-center sm:justify-end">
+                <Button variant="ghost" size="lg" className="px-3" onClick={skip} title="Come back to this one later (S)"><SkipForward /> Skip for now</Button>
+                <IAppliedButton key={item.id} applicationId={item.id} size="lg" variant="outline" onApplied={() => leave(null)} />
                 {item.apply_url && (
-                  <a href={item.apply_url} target="_blank" rel="noreferrer" className={cn(buttonVariants({ size: "lg" }), "col-span-2 px-4 sm:order-last")}>
+                  <a href={item.apply_url} target="_blank" rel="noreferrer"
+                    className={cn(buttonVariants({ size: "lg", variant: item.bot ? "outline" : "default" }), "col-span-2 px-4", !item.bot && "order-first sm:order-none")}>
                     Apply on {siteName(item)} <ArrowUpRight />
                   </a>
                 )}
-                <Button variant="ghost" size="lg" className="px-3" onClick={skip} title="Come back to this one later (S)"><SkipForward /> Skip for now</Button>
-                <IAppliedButton key={item.id} applicationId={item.id} size="lg" variant="outline" onApplied={() => leave(null)} />
+                {botReady ? (
+                  <Button size="lg" className="order-first col-span-2 px-4 sm:order-none sm:px-7" onClick={() => void applyWithBot()} loading={busy}
+                    title="The bot fills this Internshala form and submits it for you (B)">
+                    {!busy && <Bot />} Apply with the bot
+                  </Button>
+                ) : item.bot?.missing ? (
+                  <Link href={INTEGRATIONS} className={cn(buttonVariants({ size: "lg" }), "order-first col-span-2 px-4 sm:order-none")}
+                    title="Settings › Integrations: the Internshala bot switch and how to sync your login">
+                    <Bot /> {BOT_FIX[item.bot.missing]}
+                  </Link>
+                ) : null}
               </div>
             ) : (
               <div className="mx-auto flex max-w-[880px] flex-col gap-3 xl:flex-row xl:items-center xl:gap-6">
