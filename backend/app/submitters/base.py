@@ -71,6 +71,7 @@ class CandidatePacket:
     ats_credentials: dict[str, Any] = field(default_factory=dict)
     linkedin_cookie: str | None = None
     internshala_session: list[dict[str, Any]] | None = None  # cookies synced by the extension
+    internshala_user_agent: str | None = None  # the browser those cookies came from
     application_url: str = ""
     company_name: str = ""
     role_title: str = ""

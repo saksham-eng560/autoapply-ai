@@ -287,6 +287,7 @@ def trigger_linkedin_sync(user: CurrentUser, db: DB) -> dict:
 
 INTERNSHALA_DOMAIN = re.compile(r"\.?(?:[a-z0-9-]+\.)*internshala\.com")
 COOKIE_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+USER_AGENT = re.compile(r"Mozilla/5\.0 [\x20-\x7e]{10,500}")  # a browser's navigator.userAgent, header-safe
 MAX_INTERNSHALA_SESSION_CHARS = 32_000
 
 
@@ -321,6 +322,8 @@ def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser, db
     if not internshala_apply.has_login(stored):
         raise HTTPException(422, "You're not logged into Internshala in this browser — log in and sync again")
     user.internshala_session = stored
+    if body.user_agent is not None:  # older extensions don't send it: keep the one we have
+        user.internshala_user_agent = body.user_agent if USER_AGENT.fullmatch(body.user_agent) else None
     user.internshala_session_updated_at = now
     user.internshala_session_valid = True
     consents = dict(user.consents or {})
@@ -336,6 +339,7 @@ def disconnect_internshala(user: CurrentUser) -> dict:
     """Forget the Internshala login and turn the bot off; the extension's automatic re-syncs stop too
     (until you click Sync in the extension yourself)."""
     user.internshala_session = None
+    user.internshala_user_agent = None
     user.internshala_session_updated_at = None
     user.internshala_session_valid = False
     user.preferences = {**(user.preferences or {}), "internshala_bot_enabled": False, "internshala_auto_submit": False}
@@ -351,7 +355,7 @@ def check_internshala_session(user: CurrentUser, db: DB) -> dict:
     if not user.internshala_session:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Internshala login not synced yet — use the browser extension")
     try:
-        valid = internshala_apply.check_session(user.internshala_session)
+        valid = internshala_apply.check_session(user.internshala_session, user_agent=user.internshala_user_agent)
     except BrowserUnavailable as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"No browser available to check the session: {exc}") from exc
     except Exception as exc:  # a timeout or network error: report it, keep the stored state

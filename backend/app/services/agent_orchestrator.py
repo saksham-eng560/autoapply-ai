@@ -922,7 +922,9 @@ def _internshala_over_limit(db: Session, user: User) -> str | None:
 def _internshala_session_expired(db: Session, user: User) -> None:
     user.internshala_session_valid = False
     notify(db, user, "session_expired", "Internshala session expired",
-           "Internshala session expired — open Internshala in Chrome and click Sync in the extension.",
+           "Internshala showed the bot its sign-up / login page, so the synced login no longer works there. Log into "
+           "internshala.com in Chrome (log out and back in if you already are), then click “Sync Internshala "
+           "session” in the extension: the waiting applications are filled again automatically.",
            link="/dashboard/settings?tab=integrations")
 
 
@@ -1048,6 +1050,7 @@ def build_packet(db: Session, user: User, app: Application, resume_path: str | N
         ats_credentials=credentials,
         linkedin_cookie=user.linkedin_session_cookie,
         internshala_session=user.internshala_session if is_internshala_job(job) else None,
+        internshala_user_agent=user.internshala_user_agent if is_internshala_job(job) else None,
         application_url=job.application_url or job.source_url,
         company_name=job.company_name,
         role_title=job.role_title,
@@ -1130,7 +1133,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     if result.stage == "already_applied":
         _internshala_already_applied(db, user, app, run, by_agent=False)
         return app
-    if result.screenshot:
+    if result.screenshot and not result.session_expired:  # a login / sign-up page is not your filled form
         app.form_screenshot_url = _store(user.id, "screenshots", result.screenshot, "png", "image/png")
     app.form_fields = result.fields
     if result.answers:

@@ -104,7 +104,8 @@ async function syncInternshala(reason = "manual") {
     const response = await fetch(`${config.dashboardUrl}/api/v1/users/me/integrations/internshala-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
-      body: JSON.stringify({ cookies, reason }),
+      // The bot presents this same browser to Internshala, which can tie a login to the browser it was made in.
+      body: JSON.stringify({ cookies, reason, user_agent: navigator.userAgent }),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));

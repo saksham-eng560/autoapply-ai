@@ -50,7 +50,10 @@ SELECTORS: dict[str, Any] = {
     # pages
     "dashboard_path": "/student/dashboard",          # logged in: stays here; logged out: redirects to /login
     "login_paths": ("/login",),
-    "login_modal": ("#login-modal", "#login_modal", ".login-modal", "form#login-form"),
+    # A logged-out visitor's "Apply now" leads to the candidate sign-up page ("Sign-up and apply for free")
+    "signup_paths": ("/registration", "/signup", "/sign-up", "/register"),
+    "login_modal": ("#login-modal", "#login_modal", ".login-modal", "form#login-form",
+                    "text=/Sign-?up and apply for free/i", "text=/Already registered\\?/i"),
     "logged_in": "div.profile_icon_right",
     # detail page
     "apply_text": re.compile(r"^\s*apply( now)?\s*$", re.I),  # role=button / link name, tried first
@@ -90,7 +93,8 @@ SELECTORS: dict[str, Any] = {
 
 NOT_SYNCED = ("Internshala login not synced — log into Internshala in Chrome and click “Sync Internshala session” "
               "in the AutoApply extension")
-EXPIRED = "Internshala session expired — open Internshala in Chrome and click Sync in the extension"
+EXPIRED = ("Internshala didn't accept your synced login (it showed its sign-up / login page) — log into internshala.com "
+           "in Chrome and click “Sync Internshala session” in the extension")
 ALREADY_APPLIED = "You already applied to this internship on Internshala"
 PROFILE_GATE = "Complete your Internshala profile first (Internshala asks for it before you can apply)"
 
@@ -145,16 +149,24 @@ def has_login(cookies: list[dict[str, Any]] | None) -> bool:
 
 
 def _on_login_page(url: str) -> bool:
+    """Internshala's login or candidate sign-up page: where it sends anyone it doesn't see as logged in."""
     path = urlparse(url).path.lower()
-    return any(p in path for p in SELECTORS["login_paths"])
+    return any(p in path for p in SELECTORS["login_paths"]) or path.startswith(SELECTORS["signup_paths"])
+
+
+def browser_kwargs(cookies: list[dict[str, Any]] | None, user_agent: str | None) -> dict[str, Any]:
+    """The bot's browser for your Internshala account: your cookies, presented by the same browser they
+    came from (sites can tie a login to it) and from your own connection, never a scraping proxy."""
+    return {"cookies": internshala_cookies(cookies), "timezone_id": "Asia/Kolkata", "user_agent": user_agent,
+            "use_proxy": False}
 
 
 def check_session(cookies: list[dict[str, Any]] | None, base_url: str = BASE_URL,
-                  session_factory: Any = None) -> bool:
+                  session_factory: Any = None, user_agent: str | None = None) -> bool:
     """Open ``/student/dashboard`` with your cookies in a real browser. Logged in when Internshala keeps
     you there (or shows your profile icon); a logged-out visitor is redirected to ``/login``."""
     factory = session_factory or BrowserSession
-    with factory(cookies=internshala_cookies(cookies), timezone_id="Asia/Kolkata") as session:
+    with factory(**browser_kwargs(cookies, user_agent)) as session:
         page = session.page
         page.goto(f"{base_url.rstrip('/')}{SELECTORS['dashboard_path']}", wait_until="domcontentloaded")
         try:
@@ -432,7 +444,7 @@ class InternshalaSubmitter(BaseSubmitter):
     def session_kwargs(self, packet: CandidatePacket) -> dict[str, Any]:
         if not packet.internshala_session:
             raise SessionExpired(NOT_SYNCED)
-        return {"cookies": internshala_cookies(packet.internshala_session), "timezone_id": "Asia/Kolkata"}
+        return browser_kwargs(packet.internshala_session, packet.internshala_user_agent)
 
     def _run(self, packet: CandidatePacket, submit: bool) -> SubmissionResult:
         self._outcome = None
