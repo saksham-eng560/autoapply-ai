@@ -143,6 +143,8 @@ def _queue_item(user: User, app: Application) -> dict:
         "tailored_resume_pdf_url": file_url(app.tailored_resume_pdf_url),
         "staged_at": iso(app.staged_at),
         "blocker": orch.direct_submit_blocker(user, app),
+        # Internshala: what the bot still needs ("bot_off" / "not_synced" / "expired"), or None when it can apply
+        "bot": {"site": "Internshala", "missing": orch.internshala_missing(user)} if orch.is_internshala_job(job) else None,
         "apply_url": apply_url,
         "rows": rows,
         "attention": sum(1 for r in rows if review_sheet.needs_attention(r)),
@@ -192,6 +194,18 @@ def submit_now(application_id: str, body: DirectSubmitRequest, user: CurrentUser
     note = "Submitted from Ready to submit" + (f" (you corrected: {', '.join(edits.changed)[:300]})" if edits.changed else "")
     try:
         orch.approve_application(db, app, cover_letter=edits.cover_letter, custom_answers=edits.answers, note=note)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return {**_detail(db, app), "next_id": _next_in_queue(order, app.id)}
+
+
+@router.post("/{application_id}/bot-apply", status_code=202)
+def bot_apply(application_id: str, user: CurrentUser, db: DB) -> dict:
+    """"Apply with the bot" (Internshala): your click is the approval; the bot fills the form and submits it."""
+    app = _get(db, user.id, application_id)
+    order = list(db.scalars(_submit_queue(user.id, Application.id)))
+    try:
+        orch.bot_apply(db, user, app)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return {**_detail(db, app), "next_id": _next_in_queue(order, app.id)}

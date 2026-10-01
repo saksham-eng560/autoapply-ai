@@ -564,14 +564,16 @@ class Recorder:
 
 def test_blocker_is_none_only_when_the_bot_is_ready(auth_client: TestClient, master_resume: dict) -> None:
     cases = [({"filled": True}, None), ({}, orch.INTERNSHALA_FILLING),  # ready, but the real form not read yet
-             ({"bot": False}, orch.INTERNSHALA_BLOCKER), ({"session": False}, orch.INTERNSHALA_BLOCKER),
-             ({"valid": False}, orch.INTERNSHALA_BLOCKER)]
+             ({"bot": False}, orch.INTERNSHALA_MISSING["bot_off"]),
+             ({"session": False}, orch.INTERNSHALA_MISSING["not_synced"]),
+             ({"valid": False}, orch.INTERNSHALA_MISSING["expired"])]
     for kw, expected in cases:
         app_id = _setup(**kw)
         app = _app(app_id)
         user = app.user
         assert orch.direct_submit_blocker(user, app) == expected, kw
-    assert "I Applied" in orch.INTERNSHALA_BLOCKER and "extension" in orch.INTERNSHALA_BLOCKER
+    assert all("I Applied" in m for m in orch.INTERNSHALA_MISSING.values())
+    assert "Sync Internshala session" in orch.INTERNSHALA_MISSING["not_synced"]
     with SessionLocal() as db:  # other boards that need your own login keep their reason; ordinary jobs have none
         user = db.query(User).filter(User.email == "jane@example.com").one()
         other = Job(company_name="X", role_title="Y", description="z", source_url="https://board.example/1",
@@ -621,7 +623,7 @@ def test_turning_the_bot_on_fills_the_forms_prepared_while_it_was_off(auth_clien
     with run_inline(), SessionLocal() as db:
         orch.stage_application(db, app_id)
         db.commit()
-    assert rec.calls == [] and orch.direct_submit_blocker(_app(app_id).user, _app(app_id)) == orch.INTERNSHALA_BLOCKER
+    assert rec.calls == [] and orch.direct_submit_blocker(_app(app_id).user, _app(app_id)) == orch.INTERNSHALA_MISSING["bot_off"]
     with run_inline():  # you turn the bot on: the waiting application's real form is filled for you to review
         r = auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"internshala_bot_enabled": True}})
     assert r.status_code == 200, r.text
@@ -656,7 +658,7 @@ def test_session_expiry_flips_the_internshala_flag(auth_client: TestClient, mast
     with SessionLocal() as db:
         note = db.query(Notification).filter(Notification.event_type == "session_expired").one()
         assert note.title == "Internshala session expired" and "Sync" in note.body
-    assert orch.direct_submit_blocker(app.user, app) == orch.INTERNSHALA_BLOCKER
+    assert orch.direct_submit_blocker(app.user, app) == orch.INTERNSHALA_MISSING["expired"]
 
 
 @pytest.mark.parametrize("auto_submit", [False, True])
@@ -715,7 +717,7 @@ def test_submit_is_refused_when_the_bot_is_off(auth_client: TestClient, master_r
         db.commit()
     app = _app(app_id)
     assert rec.calls == [] and app.status == ApplicationStatus.PENDING_APPROVAL
-    assert app.manual_review_reason == orch.INTERNSHALA_BLOCKER
+    assert app.manual_review_reason == orch.INTERNSHALA_MISSING["bot_off"]
 
 
 @pytest.mark.parametrize("when", ["stage", "submit"])
@@ -802,3 +804,46 @@ def test_disconnect_sticks_until_you_sync_yourself(auth_client: TestClient) -> N
     assert not c.get("/api/v1/users/me/integrations").json()["internshala"]["connected"]
     assert c.post(url, json={"cookies": SESSION, "reason": "manual"}, headers=headers).status_code == 200
     assert c.post(url, json={"cookies": SESSION, "reason": "scheduled"}, headers=headers).status_code == 200
+
+
+def test_apply_with_the_bot_fills_and_submits_on_one_click(auth_client: TestClient, master_resume: dict,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """"Apply with the bot": your click on one card is the approval, even with "Submit automatically" off."""
+    rec = Recorder(monkeypatch)
+    app_id = _setup(status=ApplicationStatus.PENDING_APPROVAL, auto_submit=False)
+    queue = auth_client.get("/api/v1/applications/review-queue").json()["items"]
+    assert queue[0]["bot"] == {"site": "Internshala", "missing": None}
+    with run_inline():
+        r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 202, r.text
+    assert [c[0] for c in rec.calls] == ["stage", "submit"]
+    app = _app(app_id)
+    assert app.status == ApplicationStatus.APPLIED
+    assert any("You asked the bot" in (h.notes or "") for h in app.history)
+
+
+@pytest.mark.parametrize(("kw", "missing"), [({"bot": False}, "bot_off"), ({"session": False}, "not_synced"),
+                                             ({"valid": False}, "expired")])
+def test_apply_with_the_bot_says_exactly_what_is_missing(auth_client: TestClient, master_resume: dict,
+                                                         monkeypatch: pytest.MonkeyPatch, kw: dict, missing: str) -> None:
+    rec = Recorder(monkeypatch)
+    app_id = _setup(status=ApplicationStatus.PENDING_APPROVAL, **kw)
+    assert auth_client.get("/api/v1/applications/review-queue").json()["items"][0]["bot"]["missing"] == missing
+    r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 409 and r.json()["detail"] == orch.INTERNSHALA_MISSING[missing]
+    assert rec.calls == [] and _app(app_id).status == ApplicationStatus.PENDING_APPROVAL
+
+
+def test_apply_with_the_bot_is_only_for_internshala(auth_client: TestClient, master_resume: dict) -> None:
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == "jane@example.com").one()
+        job = Job(company_name="X", role_title="Y", description="z", source_url="https://boards.greenhouse.io/x/jobs/9",
+                  source_platform=ATSPlatform.GREENHOUSE)
+        db.add(job)
+        db.flush()
+        app = Application(user_id=user.id, job_id=job.id, status=ApplicationStatus.PENDING_APPROVAL)
+        db.add(app)
+        db.commit()
+        app_id = str(app.id)
+    r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    assert r.status_code == 409 and "Internshala" in r.json()["detail"]
