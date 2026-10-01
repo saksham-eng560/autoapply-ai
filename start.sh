@@ -8,6 +8,7 @@
 #    ./start.sh --stop       stop the Docker stack
 #    ./start.sh --prod       local mode with a production build of the dashboard (faster pages)
 #    ./start.sh --reset      wipe the local SQLite database first
+#    ./start.sh --ollama     use a free AI model on this computer (Ollama): checks it, downloads the model
 #    ./start.sh --help
 #
 #  First run installs everything it needs (Python venv, Chromium, npm packages) and writes a .env
@@ -18,7 +19,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-MODE="local"; DEMO=0; PROD=0; RESET=0; OPEN_BROWSER=1
+MODE="local"; DEMO=0; PROD=0; RESET=0; OPEN_BROWSER=1; OLLAMA=0
 API_PORT="${API_PORT:-8000}"; WEB_PORT="${WEB_PORT:-3000}"; DEMO_PORT="${DEMO_PORT:-8765}"
 LOG_DIR="$ROOT/logs"
 
@@ -32,7 +33,7 @@ ok()   { printf '%s\n' "${GREEN}✓${RESET_C} $*"; }
 warn() { printf '%s\n' "${YELLOW}!${RESET_C} $*"; }
 die()  { printf '%s\n' "${RED}✗ $*${RESET_C}" >&2; exit 1; }
 
-usage() { sed -n '3,15p' "$0" | sed 's/^#  \{0,1\}//'; exit 0; }
+usage() { sed -n '3,16p' "$0" | sed 's/^#  \{0,1\}//'; exit 0; }
 
 for arg in "$@"; do
   case "$arg" in
@@ -41,6 +42,7 @@ for arg in "$@"; do
     --demo) DEMO=1 ;;
     --prod) PROD=1 ;;
     --reset) RESET=1 ;;
+    --ollama) OLLAMA=1 ;;
     --no-open) OPEN_BROWSER=0 ;;
     -h|--help) usage ;;
     *) die "Unknown option: $arg (see ./start.sh --help)" ;;
@@ -104,9 +106,133 @@ open(".env", "w").write(text)
 PY
     ok "Generated ENCRYPTION_KEY"
   fi
-  if ! grep -qE '^ANTHROPIC_API_KEY=.+' .env; then
-    warn "No ANTHROPIC_API_KEY in .env — everything works on built-in heuristics; add a key for much better tailoring."
+  if [ -z "$(env_value ANTHROPIC_API_KEY)" ] && [ -z "$(env_value OPENAI_API_KEY)" ] && [ -z "$(env_value OLLAMA_MODEL)" ] \
+     && [ "$(env_value LLM_PROVIDER)" != "ollama" ] && [ "$OLLAMA" = 0 ]; then
+    warn "No AI model in .env — everything works on built-in heuristics. Add ANTHROPIC_API_KEY for the best results,"
+    warn "or run ${BOLD}./start.sh --ollama${RESET_C} for a free AI model on this computer."
+    if ollama_up "$DEFAULT_OLLAMA_URL"; then
+      say "Ollama is already running on this computer: ./start.sh --ollama sets the app up to use it."
+    fi
   fi
+}
+
+# ------------------------------------------------------------------------------------------------ Ollama (free local AI)
+DEFAULT_OLLAMA_URL="http://localhost:11434"
+DEFAULT_OLLAMA_MODEL="qwen3.5:4b"
+OLLAMA_URL_FOR_RUN=""
+
+env_value() {  # env_value KEY -> its value in .env (inline comment and quotes stripped; empty if missing)
+  [ -f .env ] || return 0
+  sed -n "s/^$1=//p" .env | tail -n 1 | sed -e 's/^#.*$//' -e 's/[[:space:]]#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+env_set_if_empty() {  # env_set_if_empty KEY VALUE: only when KEY is missing or empty in .env; other lines are untouched
+  [ -z "$(env_value "$1")" ] || return 1
+  "${PY_BOOT:-python3}" - "$1" "$2" <<'PY'
+import re, sys
+key, value = sys.argv[1], sys.argv[2]
+text = open(".env").read()
+empty = re.compile(r"(?m)^" + re.escape(key) + r"=[ \t]*(#.*)?$")
+if empty.search(text):
+    text = empty.sub(lambda m: f"{key}={value}" + (f"  {m.group(1)}" if m.group(1) else ""), text, count=1)
+else:
+    text += ("" if not text or text.endswith("\n") else "\n") + f"{key}={value}\n"
+open(".env", "w").write(text)
+PY
+}
+
+ollama_up() { curl -fsS -o /dev/null --max-time 3 "$1/api/version" 2>/dev/null; }
+
+ollama_has_model() {  # ollama_has_model <url> <model>
+  curl -fsS -o /dev/null --max-time 10 -H 'Content-Type: application/json' -X POST "$1/api/show" -d "{\"model\": \"$2\"}" 2>/dev/null
+}
+
+ollama_pull_api() {  # ollama_pull_api <url> <model>: download through Ollama's API, showing progress
+  curl -fsS -N --max-time 7200 -H 'Content-Type: application/json' -X POST "$1/api/pull" -d "{\"model\": \"$2\", \"stream\": true}" \
+    | "${PY_BOOT:-python3}" -c '
+import json, sys
+layers, ok = {}, False
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("error"):
+        print("\n" + str(event["error"]), file=sys.stderr)
+        sys.exit(1)
+    if event.get("digest") and event.get("total"):
+        layers[event["digest"]] = (event.get("completed") or 0, event["total"])
+    done, total = sum(c for c, _ in layers.values()), sum(t for _, t in layers.values())
+    status = str(event.get("status") or "")
+    ok = ok or status == "success"
+    if total:
+        print(f"\r  {status[:28]:<28} {done / 1e9:5.2f} of {total / 1e9:.2f} GB {done * 100 // total:3d}%", end="", flush=True)
+    else:
+        print(f"\r  {status[:60]:<60}", end="", flush=True)
+print()
+sys.exit(0 if ok else 1)
+'
+}
+
+setup_ollama() {  # --ollama: make sure Ollama runs here, the model is downloaded and .env points at it
+  local url model version size i=0 started=0
+  url="$(env_value OLLAMA_BASE_URL)"; url="${url%/}"
+  case "$url" in
+    *ollama.com*)
+      if [ -z "$(env_value OLLAMA_API_KEY)" ]; then
+        warn "OLLAMA_BASE_URL is Ollama Cloud but OLLAMA_API_KEY is empty: create a key at https://ollama.com/settings/keys"
+        warn "and paste it into .env with an editor (never on the command line)."
+      else
+        ok "Using Ollama Cloud (a key is set in .env)"
+      fi
+      if env_set_if_empty LLM_PROVIDER ollama; then ok "Set LLM_PROVIDER=ollama in .env"; fi
+      [ -n "$(env_value OLLAMA_MODEL)" ] || warn "Set OLLAMA_MODEL in .env to a cloud model, e.g. gpt-oss:120b"
+      return 0 ;;
+    ""|*://ollama:*|*://host.docker.internal:*) url="$DEFAULT_OLLAMA_URL" ;;  # Docker-only names: use this computer
+  esac
+  say "Checking Ollama at $url…"
+  if ! ollama_up "$url"; then
+    if [ "$url" != "$DEFAULT_OLLAMA_URL" ] && ollama_up "$DEFAULT_OLLAMA_URL"; then
+      url="$DEFAULT_OLLAMA_URL"
+    elif [ "$(uname -s)" = "Darwin" ] && [ -d /Applications/Ollama.app ]; then
+      say "Starting the Ollama app…"; open -a Ollama >/dev/null 2>&1 || true; started=1
+    elif command -v ollama >/dev/null 2>&1; then
+      say "Starting ollama serve…"; mkdir -p "$LOG_DIR"; (nohup ollama serve >"$LOG_DIR/ollama.log" 2>&1 &); started=1
+    fi
+    while [ "$started" = 1 ] && ! ollama_up "$url" && [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
+  fi
+  if ! ollama_up "$url"; then
+    warn "Ollama isn't running at $url."
+    if [ "$(uname -s)" = "Darwin" ]; then
+      warn "Install the Ollama app from https://ollama.com/download (or: brew install ollama) and open it once,"
+    else
+      warn "Install it with: curl -fsSL https://ollama.com/install.sh | sh   (see https://ollama.com/download),"
+    fi
+    warn "then run ./start.sh --ollama again. Continuing without it for now."
+    return 0
+  fi
+  version="$(curl -fsS --max-time 3 "$url/api/version" 2>/dev/null | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' || true)"
+  ok "Ollama ${version:+$version }is running at $url"
+  if env_set_if_empty LLM_PROVIDER ollama; then ok "Set LLM_PROVIDER=ollama in .env"; fi
+  if env_set_if_empty OLLAMA_MODEL "$DEFAULT_OLLAMA_MODEL"; then ok "Set OLLAMA_MODEL=$DEFAULT_OLLAMA_MODEL in .env"; fi
+  if [ "$(env_value LLM_PROVIDER)" != "ollama" ]; then
+    say "LLM_PROVIDER=$(env_value LLM_PROVIDER) in .env: Claude / OpenAI keys (if set) go first and Ollama is the fallback."
+  fi
+  model="$(env_value OLLAMA_MODEL)"; model="${model:-$DEFAULT_OLLAMA_MODEL}"
+  if ollama_has_model "$url" "$model"; then
+    ok "Model $model is downloaded"
+  else
+    size="a few GB"; [ "$model" = "$DEFAULT_OLLAMA_MODEL" ] && size="about 3.4 GB"
+    say "Downloading $model (one time, $size)…"
+    if command -v ollama >/dev/null 2>&1 && [ "$url" = "$DEFAULT_OLLAMA_URL" ]; then
+      ollama pull "$model" || warn "Download failed — try: ollama pull $model"
+    else
+      ollama_pull_api "$url" "$model" || warn "Download failed — press Download model in Settings › Integrations later."
+    fi
+    if ollama_has_model "$url" "$model"; then ok "Model $model is ready"; fi
+  fi
+  OLLAMA_URL_FOR_RUN="$url"
 }
 
 # ------------------------------------------------------------------------------------------------ docker
@@ -121,6 +247,9 @@ if [ "$MODE" = "docker" ]; then
   command -v docker >/dev/null 2>&1 || die "Docker is not installed — install Docker Desktop, or run ./start.sh without --docker."
   docker info >/dev/null 2>&1 || die "Docker is installed but not running — start Docker Desktop and try again."
   ensure_env
+  if [ "$OLLAMA" = 1 ]; then
+    setup_ollama  # the containers reach this computer's Ollama at host.docker.internal
+  fi
   say "Building and starting the stack (first build takes a few minutes)…"
   docker compose up --build -d
   if [ "$DEMO" = 1 ]; then
@@ -145,6 +274,18 @@ ok "Python $("$PY_BOOT" -c 'import platform; print(platform.python_version())') 
 
 ensure_env
 mkdir -p "$LOG_DIR" backend/data
+if [ "$OLLAMA" = 1 ]; then
+  setup_ollama
+elif [ -n "$(env_value OLLAMA_MODEL)" ] || [ "$(env_value LLM_PROVIDER)" = "ollama" ]; then
+  OLLAMA_CONFIGURED_URL="$(env_value OLLAMA_BASE_URL)"
+  case "$OLLAMA_CONFIGURED_URL" in
+    *ollama.com*) ;;
+    ""|*://ollama:*|*://host.docker.internal:*)  # Docker-only names don't resolve outside Docker
+      OLLAMA_URL_FOR_RUN="$DEFAULT_OLLAMA_URL"
+      ollama_up "$DEFAULT_OLLAMA_URL" || warn "Ollama isn't running at $DEFAULT_OLLAMA_URL — open the Ollama app (or run ./start.sh --ollama)." ;;
+    *) ollama_up "$OLLAMA_CONFIGURED_URL" || warn "Ollama isn't answering at $OLLAMA_CONFIGURED_URL — start it, or the agent uses heuristics." ;;
+  esac
+fi
 
 hash_of() { "$PY_BOOT" -c 'import hashlib, sys; print(hashlib.sha256(b"".join(open(p, "rb").read() for p in sys.argv[1:])).hexdigest())' "$@"; }
 
@@ -192,6 +333,7 @@ export BACKEND_URL="http://127.0.0.1:$API_PORT"
 export NEXT_PUBLIC_WS_URL="ws://localhost:$API_PORT/api/v1/ws"
 export NEXT_TELEMETRY_DISABLED=1
 export PYTHONUNBUFFERED=1
+if [ -n "$OLLAMA_URL_FOR_RUN" ]; then export OLLAMA_BASE_URL="$OLLAMA_URL_FOR_RUN"; fi
 
 if [ "$RESET" = 1 ]; then
   rm -f "$ROOT"/backend/data/autoapply.db "$ROOT"/backend/data/autoapply.db-*

@@ -1,6 +1,8 @@
 """Text embeddings for semantic job <-> resume matching (pgvector, 1536 dims).
 
 * ``EMBEDDING_PROVIDER=openai``: OpenAI ``text-embedding-3-small`` (1536 dims).
+* ``EMBEDDING_PROVIDER=ollama``: ``OLLAMA_EMBED_MODEL`` (default ``nomic-embed-text``, 768 dims) on
+  your Ollama, zero-padded to ``EMBEDDING_DIM`` (padding doesn't change cosine similarity).
 * ``EMBEDDING_PROVIDER=local`` (default): deterministic feature-hashing embedder over words,
   bigrams and known skills. It needs no API key and gives useful keyword-level similarity.
 
@@ -19,6 +21,7 @@ from itertools import pairwise
 import httpx
 
 from app.config import settings
+from app.services.llm import ollama_headers
 from app.services.text_utils import extract_skills, tokenize
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,39 @@ def openai_embeddings(texts: list[str]) -> list[list[float]]:
     return [d["embedding"] for d in data]
 
 
+OLLAMA_EMBED_CHARS = 4000  # first ~1000 tokens of each text: quick on a CPU, and the start says the most
+_warned_dims: set[int] = set()
+
+
+def fit_dim(vec: list[float]) -> list[float]:
+    """Zero-pad (or, for a bigger model, cut and re-normalise) a vector to ``EMBEDDING_DIM``."""
+    if len(vec) == DIM:
+        return vec
+    if len(vec) < DIM:
+        return vec + [0.0] * (DIM - len(vec))
+    if len(vec) not in _warned_dims:
+        _warned_dims.add(len(vec))
+        logger.warning("Embedding model returns %s dimensions; keeping the first %s (EMBEDDING_DIM)", len(vec), DIM)
+    cut = vec[:DIM]
+    norm = math.sqrt(sum(v * v for v in cut)) or 1.0
+    return [v / norm for v in cut]
+
+
+def ollama_embeddings(texts: list[str]) -> list[list[float]]:
+    response = httpx.post(
+        f"{settings.ollama_base_url}/api/embed",
+        headers=ollama_headers(),
+        json={"model": settings.OLLAMA_EMBED_MODEL, "input": [t[:OLLAMA_EMBED_CHARS] for t in texts],
+              "truncate": True, "keep_alive": settings.OLLAMA_KEEP_ALIVE},
+        timeout=httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS, connect=10.0),
+    )
+    response.raise_for_status()
+    vectors = response.json()["embeddings"]
+    if len(vectors) != len(texts):
+        raise ValueError(f"Ollama returned {len(vectors)} embeddings for {len(texts)} texts")
+    return [fit_dim([float(v) for v in vec]) for vec in vectors]
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
@@ -69,6 +105,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             return openai_embeddings(texts)
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenAI embeddings failed (%s); using local embeddings", exc)
+    if settings.EMBEDDING_PROVIDER == "ollama":
+        try:
+            return ollama_embeddings(texts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ollama embeddings (%s) failed (%s); using local embeddings", settings.OLLAMA_EMBED_MODEL, exc)
     return [local_embedding(t) for t in texts]
 
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser, ExtensionUser
+from app.api.deps import DB, CurrentUser, ExtensionUser, limiter
 from app.api.serializers import user_out
 from app.automation.proxy import proxy_manager
 from app.config import settings
@@ -21,8 +21,8 @@ from app.schemas.user import (
     PreferencesUpdate,
     ProfileUpdate,
 )
+from app.services.ai_setup import PullError, connection_test, llm_section, pull_progress, start_pull
 from app.services.google_oauth import has_scope
-from app.services.llm import get_llm
 from app.services.location_focus import get_season
 from app.services.presets import apply_preset
 from app.services.privacy import delete_user_data, export_user_data
@@ -176,7 +176,6 @@ def update_ats_credentials(body: ATSCredentialsUpdate, user: CurrentUser) -> dic
 # ------------------------------------------------------------------ integrations
 @router.get("/integrations")
 def integrations(user: CurrentUser) -> dict:
-    llm = get_llm()
     return {
         "google": {
             "configured": settings.google_configured,
@@ -194,14 +193,37 @@ def integrations(user: CurrentUser) -> dict:
             "profile_diff": (user.linkedin_profile_snapshot or {}).get("diff"),
             "synced_at": (user.linkedin_profile_snapshot or {}).get("synced_at"),
         },
-        "llm": {"providers": llm.provider_names, "model": settings.ANTHROPIC_MODEL if settings.ANTHROPIC_API_KEY else None,
-                "embedding_provider": settings.EMBEDDING_PROVIDER},
+        "llm": llm_section(),
         "automation": {"proxies": len(proxy_manager.urls), "captcha": bool(settings.CAPTCHA_API_KEY),
                        "dry_run": settings.SUBMISSION_DRY_RUN, "auto_stage": settings.AUTO_STAGE_APPLICATIONS},
         "notifications": {"smtp": bool(settings.SMTP_HOST), "discord": bool(user.prefs.get("discord_webhook_url") or settings.DISCORD_WEBHOOK_URL),
                           "slack": bool(user.prefs.get("slack_webhook_url") or settings.SLACK_WEBHOOK_URL)},
         "ats_credentials": sorted((user.ats_credentials or {}).keys()),
     }
+
+
+# AI model: keys live only in .env on the machine running the app; these endpoints never take or show one.
+@router.post("/integrations/llm/test")
+@limiter.limit("10/minute")
+def test_llm(request: Request, user: CurrentUser) -> dict:
+    """Send one tiny request to the configured AI model: {ok, provider, model, latency_ms, sample | error, hint}."""
+    return connection_test()
+
+
+@router.post("/integrations/ollama/pull", status_code=202)
+@limiter.limit("10/minute")
+def pull_ollama_model(request: Request, user: CurrentUser) -> dict:
+    """Start downloading OLLAMA_MODEL into Ollama in the background."""
+    try:
+        return start_pull()
+    except PullError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get("/integrations/ollama/pull")
+def ollama_pull_progress(user: CurrentUser) -> dict:
+    """Download progress: {status: idle | pulling | success | error, completed, total, percent, error}."""
+    return pull_progress()
 
 
 @router.post("/integrations/linkedin-cookie")

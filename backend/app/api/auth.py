@@ -18,7 +18,7 @@ from app.core.security import TokenError, create_token, hash_password, verify_pa
 from app.models.user import User, default_preferences
 from app.schemas.user import LoginRequest, PasswordChange, RegisterRequest
 from app.services import google_oauth
-from app.services.llm import get_llm
+from app.services.llm import active_model, get_llm
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,7 +40,7 @@ def auth_config() -> dict:
         "google_enabled": settings.google_configured,
         "registration_enabled": settings.ALLOW_REGISTRATION,
         "llm_providers": llm.provider_names,
-        "llm_model": settings.ANTHROPIC_MODEL if settings.ANTHROPIC_API_KEY else (settings.OPENAI_MODEL if settings.OPENAI_API_KEY else None),
+        "llm_model": active_model(llm),
         "environment": settings.ENVIRONMENT,
     }
 

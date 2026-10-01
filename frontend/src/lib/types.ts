@@ -416,10 +416,53 @@ export interface NotificationItem {
 export interface Integrations {
   google: { configured: boolean; connected: boolean; email: string | null; gmail: boolean; calendar: boolean; last_polled_at: string | null; push_enabled: boolean };
   linkedin: { connected: boolean; session_valid: boolean; updated_at: string | null; profile_diff: { has_changes: boolean; changes: { section: string; change: string; linkedin_value: string }[]; summary: string } | null; synced_at: string | null };
-  llm: { providers: string[]; model: string | null; embedding_provider: string };
+  llm: {
+    /** Provider tried first (null = built-in heuristics only); the rest are fallbacks. */
+    provider: string | null;
+    providers: string[];
+    model: string | null;
+    embedding_provider: string;
+    ollama: OllamaStatus;
+  };
   automation: { proxies: number; captcha: boolean; dry_run: boolean; auto_stage: boolean };
   notifications: { smtp: boolean; discord: boolean; slack: boolean };
   ats_credentials: string[];
+}
+
+export interface OllamaPullProgress {
+  status: "idle" | "pulling" | "success" | "error";
+  model: string | null;
+  /** Ollama's own step, e.g. "pulling manifest", "verifying sha256 digest". */
+  detail: string | null;
+  completed: number;
+  total: number;
+  percent: number;
+  error: string | null;
+}
+
+export interface OllamaStatus {
+  configured: boolean;
+  /** Scheme + host only; keys are never sent to the dashboard. */
+  base_url: string;
+  cloud: boolean;
+  model: string | null;
+  reachable: boolean;
+  version: string | null;
+  /** null when it can't be known (Ollama unreachable, or a cloud model). */
+  model_pulled: boolean | null;
+  models: string[];
+  error: string | null;
+  pull: OllamaPullProgress | null;
+}
+
+export interface LLMTestResult {
+  ok: boolean;
+  provider: string | null;
+  model: string | null;
+  latency_ms: number;
+  sample?: string;
+  error?: string;
+  hint?: string;
 }
 
 export interface FieldMapping {
