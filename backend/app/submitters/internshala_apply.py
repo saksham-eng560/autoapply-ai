@@ -142,6 +142,25 @@ def internshala_cookies(cookies: list[dict[str, Any]] | None) -> list[dict[str, 
     return out
 
 
+_TO_CHROME_SAME_SITE = {"None": "no_restriction", "Lax": "lax", "Strict": "strict"}
+
+
+def extension_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Playwright cookies -> the extension's format (what ``internshala_cookies`` reads), Internshala's only."""
+    out = []
+    for c in cookies:
+        domain = str(c.get("domain") or "")
+        if not domain.lstrip(".").endswith("internshala.com"):
+            continue
+        expires = c.get("expires")
+        out.append({"name": c["name"], "value": c.get("value", ""), "domain": domain, "path": c.get("path") or "/",
+                    "secure": bool(c.get("secure")), "httpOnly": bool(c.get("httpOnly")),
+                    "sameSite": _TO_CHROME_SAME_SITE.get(str(c.get("sameSite")), "unspecified"),
+                    "expirationDate": float(expires) if expires and float(expires) > 0 else None,
+                    "hostOnly": not domain.startswith(".")})
+    return out
+
+
 def has_login(cookies: list[dict[str, Any]] | None) -> bool:
     """The cookies of a logged-in Internshala account (the extension uses the same rule)."""
     values = {str(c.get("name")): str(c.get("value") or "") for c in cookies or []}
@@ -439,6 +458,7 @@ class InternshalaSubmitter(BaseSubmitter):
     def __init__(self, session_factory: Any = None) -> None:
         super().__init__(session_factory)
         self._outcome: tuple[str, str | None] | None = None  # set when a listing can't be applied to here
+        self._login_verified = False  # this run checked your dashboard: you're logged in
 
     # ------------------------------------------------------------------ lifecycle
     def session_kwargs(self, packet: CandidatePacket) -> dict[str, Any]:
@@ -448,6 +468,7 @@ class InternshalaSubmitter(BaseSubmitter):
 
     def _run(self, packet: CandidatePacket, submit: bool) -> SubmissionResult:
         self._outcome = None
+        self._login_verified = False
         self.form_root = None
         try:
             result = super()._run(packet, submit)
@@ -465,8 +486,44 @@ class InternshalaSubmitter(BaseSubmitter):
             pass
 
     def _check_login(self, page: Any) -> None:
-        if _on_login_page(page.url) or _first_visible(page, SELECTORS["login_modal"]) is not None:
-            raise SessionExpired(EXPIRED)
+        """A login / sign-up page or prompt *may* mean Internshala doesn't see you as logged in. Logged-in
+        students land on /registration/... pages too (e.g. to finish a profile) and pages can carry sign-up
+        text, so before blaming the login the bot looks at your dashboard in the same browser."""
+        on_login_path = _on_login_page(page.url)
+        if not on_login_path and (self._login_verified or _first_visible(page, SELECTORS["login_modal"]) is None):
+            return
+        if not self._login_verified:
+            if not self._still_logged_in(page):
+                raise SessionExpired(EXPIRED)
+            self._login_verified = True
+        if on_login_path:
+            path = urlparse(page.url).path
+            self._stop("unavailable", f"Internshala opened {path} instead of the application form. Your login works: "
+                       "open the posting to see what Internshala asks for (often: finish your Internshala profile).",
+                       page.url)
+        # Sign-up text on a page while you're logged in isn't about your login: carry on
+
+    @staticmethod
+    def _still_logged_in(page: Any) -> bool:
+        """Open your Internshala dashboard in a new tab of the same browser: logged out, it sends you to /login."""
+        origin = "{0.scheme}://{0.netloc}".format(urlparse(page.url))
+        probe = page.context.new_page()
+        try:
+            probe.goto(f"{origin}{SELECTORS['dashboard_path']}", wait_until="domcontentloaded")
+            return SELECTORS["dashboard_path"] in urlparse(probe.url).path and not _on_login_page(probe.url)
+        except Exception:  # noqa: BLE001 - can't tell (network): don't blame the login
+            return True
+        finally:
+            probe.close()
+
+    def after_run(self, session: Any, result: SubmissionResult) -> None:
+        """Internshala renews the login cookies as you browse (PHPSESSID, l, sessionToken): keep the renewed
+        ones, as a browser would, so the next run doesn't start from a stale copy."""
+        if result.session_expired:
+            return
+        renewed = extension_cookies(session.context.cookies())
+        if has_login(renewed):
+            result.session_cookies = renewed
 
     def _stop(self, outcome: str, message: str, url: str | None) -> None:
         self._outcome = (outcome, url)
