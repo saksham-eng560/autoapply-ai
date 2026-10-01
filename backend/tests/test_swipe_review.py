@@ -70,7 +70,10 @@ def test_hard_and_soft_filters() -> None:
     assert prefilter(make_job(), prefs, strict=False) == (True, None)  # swipe mode: you decide
     assert prefilter(make_job(), prefs)[0] is False  # auto mode keeps the old behaviour
     assert not prefilter(make_job(company_name="Evil Inc"), prefs, strict=False)[0]
-    assert not prefilter(make_job(job_type=JobType.FULL_TIME), prefs, strict=False)[0]
+    assert prefilter(make_job(role_title="Software Engineer", job_type=JobType.FULL_TIME), prefs, strict=False) == (
+        False, "Not an internship (full-time role)")
+    # LinkedIn lists many internships as "Full-time": an intern title is enough
+    assert prefilter(make_job(job_type=JobType.FULL_TIME), prefs, strict=False)[0]
     no_visa = make_job(raw_data={"sponsorship": "Does Not Offer Sponsorship"})
     assert prefilter(no_visa, prefs, strict=False) == (False, "The posting says it does not sponsor visas")
     assert prefilter(no_visa, {**prefs, "exclude_no_sponsorship": False}, strict=False)[0]

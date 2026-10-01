@@ -225,6 +225,15 @@ as the prime location. All of it is in Settings › Preferences › Internship f
   doesn't say so. Change the share with the slider (50–100%) or switch the focus off.
 - **Summer 2027.** Postings clearly for another term ("Summer 2026", "Fall '26", "Intern 2026") are
   skipped. Ones that don't say are kept, and ones that start immediately get a heads-up.
+- **Intern roles only, for your year.** Every source (big tech, top companies, Internshala, LinkedIn,
+  the lists) keeps internships only: full-time, new-grad and contract jobs, and full-time jobs about
+  interns ("Intern Program Manager"), never reach your deck. With your year of study (default 2nd year)
+  and graduation year (read from your resume, or set it), internships for other students are skipped
+  too: final-year or pre-final-year only, "rising seniors", PhD / Master's / MBA only, another graduating
+  batch, or "2+ years of experience". Ones that name your year (Google STEP, "1st and 2nd year
+  students") are tagged **Open to 2nd-year students**. Settings › Preferences › Search preferences.
+- **At most 10 from Internshala a scan.** Each scan adds the best 10 new Internshala postings at most
+  (and never more than 25% of the scan), so they don't crowd out the rest. Settings › Mass apply.
 - **Internshala applications** need your own Internshala login. By default the agent prepares your
   resume and answers and asks you to apply there; click **I Applied** afterwards and it's tracked. If
   you turn on the opt-in **Internshala bot** (see

@@ -146,6 +146,7 @@ def queue(
 ) -> dict:
     orch.backfill_company_checks(db, limit=500)  # postings saved before the company check existed
     orch.skip_suspicious_waiting(db, user)
+    orch.skip_ineligible_waiting(db, user)  # full-time / final-year-only / PhD-only cards from before the filter
     filtered = _queue_query(user, min_score, job_type, remote, q)
     prefs = user.prefs
     trust = case((Job.company_tier.is_not(None), 0), (Job.company_verdict == "verified", 1),

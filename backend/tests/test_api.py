@@ -187,7 +187,7 @@ def test_import_without_resume_does_not_prepare(auth_client: TestClient, monkeyp
     monkeypatch.setattr(agent_orchestrator, "fetch_job_from_url", lambda url: ScrapedJob(
         company_name="Initech", role_title="Data Engineer", description="Python", source_url=url, application_url=url,
         source_platform=ATSPlatform.CUSTOM).finalize())
-    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"job_types": ["full-time", "internship"]}})
+    auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"job_types": ["full-time", "internship"], "internships_only": False}})
     r = auth_client.post("/api/v1/jobs/import", json={"url": "https://initech.example/jobs/1", "prepare": True})
     assert r.status_code == 201, r.text
     assert r.json()["status"] == "discovered" and "master resume" in r.json()["match_reasoning"]

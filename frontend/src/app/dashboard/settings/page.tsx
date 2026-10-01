@@ -20,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { useIntegrations, useMe } from "@/hooks/use-applications";
 import { ApiError, api, del, fetcher, patch, post, put } from "@/lib/api-client";
-import type { FieldMapping, Integrations, LLMTestResult, LocationFocus, OllamaPullProgress, Preferences, StandardField } from "@/lib/types";
+import type { FieldMapping, Integrations, LLMTestResult, LocationFocus, OllamaPullProgress, Preferences, StandardField, StudentInfo } from "@/lib/types";
 import { PLATFORM_LABELS, cn, timeAgo } from "@/lib/utils";
 
 const ALL_PLATFORMS = ["internshala", "internships", "greenhouse", "lever", "ashby", "workday", "linkedin", "indeed", "glassdoor", "wellfound", "generic"];
@@ -31,7 +31,7 @@ const PRESETS = [
   { name: "india-internships", title: "India · Summer 2027", text: "Internships only, ~90% in India with Delhi NCR first: Internshala, LinkedIn India and Indeed India, plus the Summer 2027 lists." },
   { name: "internships", title: "Internships", text: "Intern roles, 4,000+ curated listings (SimplifyJobs, vanshb03) plus 110 startup boards, 100 applications/day." },
   { name: "startups", title: "Startups", text: "Adds 110 startup Greenhouse, Ashby and Lever boards to your sources, keeps your roles and job types." },
-  { name: "new-grad", title: "New grad", text: "Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards." },
+  { name: "new-grad", title: "New grad", text: "Entry-level full-time roles from the SimplifyJobs new-grad list plus the startup boards. Turns “Internships only” off." },
 ] as const;
 
 function MassApplyPanel() {
@@ -48,7 +48,8 @@ function MassApplyPanel() {
       review_mode: prefs.review_mode, resume_strategy: prefs.resume_strategy, auto_submit_kept: prefs.auto_submit_kept, trust_generated_answers: prefs.trust_generated_answers,
       auto_keep_min_score: prefs.auto_keep_min_score, max_jobs_per_source: prefs.max_jobs_per_source,
       exclude_no_sponsorship: prefs.exclude_no_sponsorship, max_applications_per_day: prefs.max_applications_per_day,
-      internshala_share: prefs.internshala_share ?? 25, skip_suspicious_companies: prefs.skip_suspicious_companies ?? true,
+      internshala_share: prefs.internshala_share ?? 25, internshala_per_scan: prefs.internshala_per_scan ?? 10,
+      skip_suspicious_companies: prefs.skip_suspicious_companies ?? true,
       scan_top_companies: prefs.scan_top_companies ?? true,
       sources: { internship_lists: prefs.sources.internship_lists || [] },
     } });
@@ -120,7 +121,11 @@ function MassApplyPanel() {
           <Row label="Search top companies in every scan" hint="Big tech, product companies, renowned Indian and global startups and AI companies, from their own job boards. They get their own page: Top companies.">
             <Switch checked={prefs.scan_top_companies ?? true} onCheckedChange={(v) => set("scan_top_companies", v)} label="Search top companies in every scan" />
           </Row>
-          <Row label="Internshala share of each scan" hint="At most this % of a scan's new postings come from Internshala, the best ones kept (known companies, no warning signs). 25 % = one Internshala posting for every three from elsewhere.">
+          <Row label="Internshala postings per scan" hint="A scan adds at most this many new Internshala postings, the best ones (known companies, no warning signs). Ones you already have don't count.">
+            <Input type="number" min={0} max={50} className="max-w-[8rem]" value={prefs.internshala_per_scan ?? 10}
+              onChange={(e) => set("internshala_per_scan", Math.max(0, Math.min(50, Number(e.target.value) || 0)))} aria-label="Internshala postings per scan" />
+          </Row>
+          <Row label="Internshala share of each scan" hint="And never more than this % of a scan's new postings. 25 % = one Internshala posting for every three from elsewhere.">
             <div className="flex items-center gap-2">
               <Input type="number" min={0} max={100} className="max-w-[8rem]" value={prefs.internshala_share ?? 25}
                 onChange={(e) => set("internshala_share", Math.max(0, Math.min(100, Number(e.target.value) || 0)))} aria-label="Internshala share in percent" />
@@ -184,6 +189,38 @@ function useSaver() {
     }
   };
   return { saving, run };
+}
+
+const YEAR_NAMES = ["1st", "2nd", "3rd", "4th", "5th"];
+const SOURCE_NOTE = { you: "", resume: " (from your resume)", estimate: " (estimated)", "": "" } as const;
+
+/** Year of study and graduating batch: internships only for other students are skipped. */
+function StudentRows({ prefs, set }: {
+  prefs: Preferences; set: <K extends keyof Preferences>(k: K, v: Preferences[K]) => void;
+}) {
+  const { data: info } = useSWR<StudentInfo>("/users/me/student", fetcher);
+  const guess = info && info.graduation_year_source !== "you" ? info.graduation_year : null;
+  return (
+    <>
+      <Row label="Year of study" hint="Internships only for other students are skipped: final-year only, rising seniors, PhD / Master's / MBA only, or another graduating batch. Ones that name your year (like Google STEP for 1st and 2nd years) are tagged.">
+        <Select value={prefs.year_of_study == null ? "" : String(prefs.year_of_study)} className="max-w-xs" aria-label="Year of study"
+          onChange={(e) => set("year_of_study", e.target.value ? Number(e.target.value) : null)}>
+          <option value="">Any year (don&apos;t check)</option>
+          {YEAR_NAMES.map((name, i) => <option key={name} value={i + 1}>{name} year</option>)}
+        </Select>
+      </Row>
+      <Row label="Graduating in" hint="Postings for another batch (“2026 graduates only”) are skipped. Leave empty to use your resume's education.">
+        <div className="flex max-w-md items-center gap-3">
+          <Input type="number" min={2000} max={2100} className="max-w-[8rem]" aria-label="Graduation year"
+            value={prefs.graduation_year ?? ""} placeholder={guess ? String(guess) : "e.g. 2029"}
+            onChange={(e) => set("graduation_year", e.target.value ? Number(e.target.value) : null)} />
+          {guess != null && prefs.graduation_year == null && (
+            <span className="text-sm text-muted-foreground">{guess}{SOURCE_NOTE[info!.graduation_year_source]}</span>
+          )}
+        </div>
+      </Row>
+    </>
+  );
 }
 
 function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
@@ -258,14 +295,21 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
             <option value="any">Any</option><option value="remote">Remote only</option><option value="hybrid">Hybrid / remote OK</option><option value="onsite">On-site</option>
           </Select>
         </Row>
-        <Row label="Job types">
-          <div className="flex flex-wrap gap-2">
-            {["full-time", "part-time", "internship", "contract", "freelance"].map((t) => (
-              <button key={t} type="button" onClick={() => set("job_types", prefs.job_types.includes(t) ? prefs.job_types.filter((x) => x !== t) : [...prefs.job_types, t])}
-                className={cn(pill(prefs.job_types.includes(t)), "capitalize")} aria-pressed={prefs.job_types.includes(t)}>{t}</button>
-            ))}
-          </div>
+        <Row label="Internships only" hint="Intern roles at every company: big tech, top companies and the rest. Full-time, new-grad and contract jobs are never shown or applied to.">
+          <Switch checked={prefs.internships_only ?? true} onCheckedChange={(v) => set("internships_only", v)} label="Internships only" />
         </Row>
+        {(prefs.internships_only ?? true) ? (
+          <StudentRows prefs={prefs} set={set} />
+        ) : (
+          <Row label="Job types">
+            <div className="flex flex-wrap gap-2">
+              {["full-time", "part-time", "internship", "contract", "freelance"].map((t) => (
+                <button key={t} type="button" onClick={() => set("job_types", prefs.job_types.includes(t) ? prefs.job_types.filter((x) => x !== t) : [...prefs.job_types, t])}
+                  className={cn(pill(prefs.job_types.includes(t)), "capitalize")} aria-pressed={prefs.job_types.includes(t)}>{t}</button>
+              ))}
+            </div>
+          </Row>
+        )}
         <Row label="Salary range" hint="Salary questions are answered with the bottom of this range.">
           <div className="flex max-w-md items-center gap-2">
             <Input type="number" placeholder="Min" aria-label="Minimum salary" value={prefs.salary_min ?? ""} onChange={(e) => set("salary_min", e.target.value ? Number(e.target.value) : null)} />

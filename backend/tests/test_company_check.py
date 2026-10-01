@@ -102,7 +102,9 @@ def test_internshala_is_capped_at_a_quarter_keeping_the_best() -> None:
     assert all(j.company_name != "Scam Co" for j in kept_ours)
     assert all(j in kept for j in others)
     assert cap_internshala(ours, 25)[0].__len__() == 3  # only Internshala answered: a few still shown
-    assert cap_internshala(others + ours, 100) == (others + ours, 0)
+    kept, dropped = cap_internshala(others * 10 + ours, 100)  # no share limit: still at most 10 a scan
+    assert sum(1 for j in kept if "internshala" in j.source_url) == 10 and dropped == 15
+    assert cap_internshala(others * 10 + ours, 100, per_scan=50) == (others * 10 + ours, 0)
 
 
 # ------------------------------------------------------------------ the top-companies source

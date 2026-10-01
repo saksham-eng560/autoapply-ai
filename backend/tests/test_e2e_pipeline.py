@@ -116,7 +116,7 @@ def test_full_pipeline(auth_client: TestClient, master_resume: dict, mock_site: 
     base = f"http://127.0.0.1:{mock_site.port}"
     r = c.put("/api/v1/users/me/preferences", json={"preferences": {
         "target_roles": ["Software Engineer"], "target_locations": ["San Francisco"], "auto_apply_threshold": 50,
-        "platforms": ["generic"], "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"],
+        "platforms": ["generic"], "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"], "internships_only": False,
         "review_mode": "auto"}})
     assert r.status_code == 200
     c.put("/api/v1/users/me/field-mappings", json={"mappings": [
@@ -176,7 +176,7 @@ def test_swipe_keep_then_auto_submit(auth_client: TestClient, master_resume: dic
     base = f"http://127.0.0.1:{mock_site.port}"
     r = c.put("/api/v1/users/me/preferences", json={"preferences": {
         "target_roles": ["Software Engineer"], "auto_apply_threshold": 100, "platforms": ["generic"],
-        "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"], "auto_submit_kept": True}})
+        "sources": {"career_pages": [f"{base}/careers"]}, "job_types": ["full-time"], "internships_only": False, "auto_submit_kept": True}})
     assert r.status_code == 200 and r.json()["review_mode"] == "swipe"
     c.put("/api/v1/users/me/field-mappings", json={"mappings": [
         {"field_name": "work_authorization", "field_value": "Yes"},
@@ -229,7 +229,7 @@ def test_swipe_keep_stops_for_eligibility_questions(auth_client: TestClient, mas
     c = auth_client
     base = f"http://127.0.0.1:{mock_site.port}"
     c.put("/api/v1/users/me/preferences", json={"preferences": {
-        "target_roles": ["Software Engineer"], "platforms": ["generic"], "job_types": ["full-time"],
+        "target_roles": ["Software Engineer"], "platforms": ["generic"], "job_types": ["full-time"], "internships_only": False,
         "sources": {"career_pages": [f"{base}/careers"]}}})
     with run_inline():
         c.post("/api/v1/agent/start-scan", json={"platforms": ["generic"]})
