@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSWRConfig } from "swr";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { CheckCheck } from "lucide-react";
@@ -42,6 +42,8 @@ export function IAppliedButton({ applicationId, onApplied, size = "sm", variant 
   const refresh = useRefreshTracking();
   const reduce = useReducedMotion();
   const [state, setState] = useState<"idle" | "busy" | "done">("idle");
+  // A different application (e.g. the next card in Ready to submit): start fresh, never "Applied" from the last one.
+  useEffect(() => setState("idle"), [applicationId]);
 
   const click = async (e: React.MouseEvent) => {
     e.preventDefault();
