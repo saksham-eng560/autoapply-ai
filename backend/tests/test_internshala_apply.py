@@ -913,3 +913,75 @@ def test_apply_with_the_bot_is_only_for_internshala(auth_client: TestClient, mas
         app_id = str(app.id)
     r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
     assert r.status_code == 409 and "Internshala" in r.json()["detail"]
+
+
+def test_a_refused_login_is_tried_once_and_reported_once(auth_client: TestClient, master_resume: dict,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a sync every waiting application is filled again. If Internshala refuses the login, the first
+    one finds out; the rest don't open a browser, and you get one notification, not one per application."""
+    rec = Recorder(monkeypatch, stage=SubmissionResult(False, "failed", error=ia.EXPIRED, session_expired=True))
+    waiting = [_setup(status=ApplicationStatus.PENDING_APPROVAL) for _ in range(3)]
+    sync = "/api/v1/users/me/integrations/internshala-session"
+    with run_inline():
+        assert auth_client.post(sync, json={"cookies": SESSION}, headers=_token(auth_client)).status_code == 200
+    assert [c[0] for c in rec.calls] == ["stage"]  # one browser, not three
+    with SessionLocal() as db:
+        kinds = [n.event_type for n in db.query(Notification).all()]
+    assert kinds.count("session_expired") == 1 and "application_ready" not in kinds
+    for app_id in waiting:
+        app = _app(app_id)
+        assert app.status == ApplicationStatus.PENDING_APPROVAL and not app.form_fields
+        assert orch.direct_submit_blocker(app.user, app) == orch.INTERNSHALA_MISSING["expired"]
+    time.sleep(0.01)
+    with run_inline():  # you log in again and sync: the bot tries again (once)
+        assert auth_client.post(sync, json={"cookies": SESSION}, headers=_token(auth_client)).status_code == 200
+    assert [c[0] for c in rec.calls] == ["stage", "stage"]
+
+
+def test_one_browser_at_a_time_on_your_internshala_account(auth_client: TestClient, master_resume: dict,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    lock = threading.Lock()
+    active = {"now": 0, "peak": 0}
+    filled = [{"label": "Cover letter", "kind": "cover_letter", "status": "filled", "required": True, "value": "x", "options": []}]
+
+    def slow_stage(self: InternshalaSubmitter, packet: CandidatePacket) -> SubmissionResult:
+        with lock:
+            active["now"] += 1
+            active["peak"] = max(active["peak"], active["now"])
+        time.sleep(0.3)
+        with lock:
+            active["now"] -= 1
+        return SubmissionResult(True, "staged", fields=filled, answers=[])
+
+    monkeypatch.setattr(InternshalaSubmitter, "stage", slow_stage)
+    apps = [_setup() for _ in range(3)]
+
+    def stage(app_id: str) -> None:
+        with SessionLocal() as db:
+            orch.stage_application(db, app_id)
+            db.commit()
+
+    threads = [threading.Thread(target=stage, args=(a,)) for a in apps]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert active["peak"] == 1  # never two browsers with the same login
+    assert all(_app(a).status == ApplicationStatus.PENDING_APPROVAL and _app(a).form_fields for a in apps)
+
+
+def test_submit_automatically_covers_jobs_kept_before_the_bot_could_apply(auth_client: TestClient, master_resume: dict,
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reported: "I turned it on but it doesn't auto apply". A job you kept while the bot was off waited for
+    your click forever, even with Submit automatically on. Now it goes out once the bot can apply."""
+    rec = Recorder(monkeypatch)
+    app_id = _setup(bot=False, auto_submit=True)
+    with SessionLocal() as db:
+        orch.stage_application(db, app_id)
+        db.commit()
+    assert rec.calls == [] and _app(app_id).auto_submit is False  # bot off: you apply there yourself
+    with run_inline():
+        r = auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"internshala_bot_enabled": True}})
+    assert r.status_code == 200, r.text
+    assert [c[0] for c in rec.calls] == ["stage", "submit"]
+    assert _app(app_id).status == ApplicationStatus.APPLIED
