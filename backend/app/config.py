@@ -159,9 +159,12 @@ class Settings(BaseSettings):
     @field_validator("*", mode="before")
     @classmethod
     def _drop_inline_comments(cls, value: object, info: ValidationInfo) -> object:
-        # `KEY=   # comment` in a .env file arrives as the comment text itself: use the default instead.
-        if isinstance(value, str) and value.strip().startswith("#"):
-            return cls.model_fields[info.field_name].get_default(call_default_factory=True)
+        # `KEY=   # comment` in a .env file arrives as the comment text itself (older python-dotenv) or
+        # as an empty string (newer): either way, use the default instead.
+        if isinstance(value, str):
+            default = cls.model_fields[info.field_name].get_default(call_default_factory=True)
+            if value.strip().startswith("#") or (not value.strip() and default is None):
+                return default
         return value
 
     # ---------------------------------------------------------------- helpers

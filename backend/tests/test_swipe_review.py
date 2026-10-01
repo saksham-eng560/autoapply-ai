@@ -378,6 +378,9 @@ def test_env_inline_comments_are_not_values(tmp_path) -> None:
     env.write_text("PROXY_URLS=    # comma-separated http://user:pass@host:port (A, B)\nGMAIL_PUBSUB_TOPIC=  # x\n")
     s = Settings(_env_file=str(env))
     assert s.proxy_urls == [] and s.GMAIL_PUBSUB_TOPIC is None
+    # Newer python-dotenv hands over "" for `KEY=  # comment`: an optional setting still means "not set"
+    s = Settings(_env_file=None, GMAIL_PUBSUB_TOPIC="", OLLAMA_API_KEY="  ", REDIS_URL="")
+    assert s.GMAIL_PUBSUB_TOPIC is None and s.OLLAMA_API_KEY is None and s.REDIS_URL == ""
 
 
 # ------------------------------------------------------------------ which resume is sent
