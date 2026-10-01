@@ -42,6 +42,7 @@ and shows you what is working.
 - ["I Applied" and progress tracking](#i-applied-and-progress-tracking)
 - [Fast scans with a live progress bar](#fast-scans-with-a-live-progress-bar)
 - [How forms get filled](#how-forms-get-filled)
+- [Ready to submit: check it, fix it, send it](#ready-to-submit-check-it-fix-it-send-it)
 - [How it works](#how-it-works)
 - [Free AI with Ollama](#free-ai-with-ollama)
 - [Quick start (Docker)](#quick-start-docker)
@@ -304,6 +305,38 @@ value again the way the page expects.
   from your saved answers. Otherwise the application waits for you.
 - **Written answers** ("Why this internship?") are specific, grounded in your resume and the job,
   and fit the field's length limit.
+
+## Ready to submit: check it, fix it, send it
+
+When the agent has filled an application and is waiting for you, it appears in **Ready to submit**
+(`/dashboard/submit`, in the sidebar with a count). Applications show one at a time, best match first,
+with a screenshot of the filled form. Anything that needs your attention is at the top: a required
+question it couldn't answer, a low-confidence answer, a field it couldn't fill.
+
+Each prefilled item has two buttons:
+
+- **✓ Correct** confirms it.
+- **✗ Fix** turns it into an edit box right there. What you type is exactly what gets sent.
+
+The cover letter is editable in place, and the resume links to the PDF that will be uploaded. When
+every row is checked, press **Submit application**. The agent opens the form again, fills it with what
+you approved, including your fixes, and submits. Then the next application loads.
+
+| Key | Action |
+|---|---|
+| `Y` | Confirm the selected row and move to the next |
+| `N` | Fix the selected row |
+| `J` / `K` | Move down / up |
+| `A` | Confirm all rows that aren't flagged |
+| `Enter` | Submit, once everything is confirmed |
+| `S` | Skip for now |
+
+Your fixes are learned. Corrected answers to common questions (notice period, relocation, highest education
+and work authorization) are saved, so they come pre-filled correctly next time.
+
+Internshala postings are submitted here too once the [Internshala bot](#the-internshala-bot-opt-in) is
+on. Otherwise the card shows **Apply on Internshala** with your prepared answers (each with a **Copy**
+button) and **I Applied** for afterwards.
 
 ## How it works
 
