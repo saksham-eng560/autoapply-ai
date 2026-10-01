@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.automation import human
@@ -257,7 +257,9 @@ class BaseSubmitter:
                 continue
             override = packet.override_for(f.label or f.name or f.handle)
             if override is not None:  # you corrected this field in the review queue: your value, verbatim
-                ok = (bool(f.value) and _norm(f.value) == _norm(override)) or fill_field(page, f, override)
+                # (no placeholder: "01/02/2004" in a DD/MM/YYYY box must not be re-read as a US date and flipped)
+                target = replace(f, placeholder="") if f.type in ("text", "textarea") else f
+                ok = (bool(f.value) and _norm(f.value) == _norm(override)) or fill_field(page, target, override)
                 report.append({**self._report(f, kind or "question", override, ok), "source": "user"})
                 continue
             if kind:

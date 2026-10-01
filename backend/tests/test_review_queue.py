@@ -252,6 +252,7 @@ FORM = """<!doctype html><html><body><h1>Apply</h1>
 <label for="why">Why do you want to join us? *</label><textarea id="why" name="why" required></textarea>
 <label for="hear">How did you hear about us?</label><select id="hear" name="hear"><option value="">Select</option>
   <option>LinkedIn</option><option>Referral</option><option>Other</option></select>
+<label for="dob">Date of birth *</label><input id="dob" name="dob" placeholder="DD/MM/YYYY" required>
 <button type="submit">Submit application</button>
 </form></body></html>"""
 
@@ -306,7 +307,7 @@ def test_submitter_types_your_corrections(site: _Site) -> None:
         answers=[{"question": "Why do you want to join us?", "answer": "Stored answer"}],
         resolve_answers=resolve,
         overrides={"email": "jane.doe@work.com", override_key("Why do you want to join us?"): "Your mission matches mine.",
-                   override_key("Last  Name"): "Doe-Smith"},
+                   override_key("Last  Name"): "Doe-Smith", override_key("Date of birth"): "01/02/2004"},
     )
     result = BaseSubmitter().submit(packet)
     assert result.stage == "submitted", (result.error, result.fields)
@@ -315,6 +316,7 @@ def test_submitter_types_your_corrections(site: _Site) -> None:
     assert sent["email"] == "jane.doe@work.com"  # profile correction beats the profile value
     assert sent["ln"] == "Doe-Smith"  # a label correction beats the profile value too
     assert sent["why"] == "Your mission matches mine."  # ...and the stored and generated answers
+    assert sent["dob"] == "01/02/2004"  # exactly as you typed it (1 Feb), not re-read as 2 Jan
     assert sent["hear"] == "Referral"  # everything you didn't correct still comes from the agent
     assert generated == ["How did you hear about us?"]  # never asked about a field you answered
     report = {f["label"]: f for f in result.fields}
