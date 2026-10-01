@@ -37,6 +37,8 @@ export interface Preferences {
   internship_season?: string | null;
   progress_updates_everywhere?: boolean;
   progress_digest?: "daily" | "weekly" | "off";
+  /** false: notifications only collect in the bell, with no pop-ups in the dashboard or the OS. */
+  notification_popups?: boolean;
   review_mode: "swipe" | "auto";
   auto_submit_kept: boolean;
   trust_generated_answers: boolean;

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import { LayoutGroup, motion } from "framer-motion";
 import {
@@ -27,6 +27,10 @@ import { ScanIndicator } from "@/components/scan-progress";
 import { post } from "@/lib/api-client";
 import type { AgentStatus, ScanProgress } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** Three or more notifications this close together pop up as one summary that counts up, not a stack. */
+const BURST_MS = 10_000;
+const BURST_AT = 3;
 
 type NavItem = { href: string; label: string; icon: LucideIcon; badge?: "review" | "pending" };
 
@@ -77,6 +81,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { mutate } = useSWRConfig();
   const toast = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const recent = useRef<number[]>([]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -85,11 +90,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const live = useWebSocket((event) => {
     if (event.type === "notification") {
       const d = event.data as { title?: string; body?: string; event_type?: string; link?: string };
-      toast({ title: d.title || "Update", description: d.body, tone: d.event_type?.includes("error") || d.event_type?.includes("failed") ? "error" : "info" });
-      if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-        navigator.serviceWorker?.controller?.postMessage({ type: "notify", title: d.title, body: d.body, link: d.link });
-      }
       mutate((key) => typeof key === "string" && (key.startsWith("/notifications") || key.startsWith("/agent")));
+      if (me?.preferences.notification_popups === false) return; // muted: it's in the bell, no pop-up
+      const now = Date.now();
+      recent.current = [...recent.current.filter((t) => now - t < BURST_MS), now];
+      const burst = recent.current.length >= BURST_AT;
+      const title = burst ? `${recent.current.length} new notifications` : d.title || "Update";
+      const body = burst ? "They're all in the bell (top right). Mute pop-ups there if you'd rather not see them." : d.body;
+      if (burst) toast({ id: "notification-burst", title, description: body, tone: "info" });
+      else toast({ title, description: body, tone: d.event_type?.includes("error") || d.event_type?.includes("failed") ? "error" : "info" });
+      if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+        navigator.serviceWorker?.controller?.postMessage({ type: "notify", title, body, link: burst ? "/dashboard" : d.link, tag: burst ? "burst" : undefined });
+      }
     }
     if (event.type === "scan_progress") {
       const d = event.data as { run_id: string; progress: ScanProgress };

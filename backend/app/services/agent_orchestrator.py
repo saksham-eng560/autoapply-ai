@@ -25,6 +25,7 @@ import dataclasses
 import logging
 import os
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -919,8 +920,34 @@ def _internshala_over_limit(db: Session, user: User) -> str | None:
     return f"Daily Internshala limit reached ({done}/{limit}); it goes out tomorrow" if done >= limit else None
 
 
+# One browser at a time on your Internshala account (a person never applies from four windows at once), and
+# once Internshala has refused the synced login, nothing else tries it until you sync again. Per process: the
+# local app runs every job in one process.
+_internshala_guard = threading.Lock()
+_internshala_locks: dict[uuid.UUID, threading.Lock] = {}
+_internshala_refused: dict[uuid.UUID, float] = {}   # when the bot last saw Internshala refuse the login
+_internshala_notified: dict[uuid.UUID, float] = {}  # the sync we already told you about
+
+
+def _synced_at(user: User) -> float:
+    return user.internshala_session_updated_at.timestamp() if user.internshala_session_updated_at else 0.0
+
+
+def _internshala_lock(user_id: uuid.UUID) -> threading.Lock:
+    with _internshala_guard:
+        return _internshala_locks.setdefault(user_id, threading.Lock())
+
+
+def internshala_refused(user: User) -> bool:
+    """Internshala refused the login you synced most recently (your next sync clears this)."""
+    return _internshala_refused.get(user.id, -1.0) >= _synced_at(user)
+
+
 def _internshala_session_expired(db: Session, user: User) -> None:
     user.internshala_session_valid = False
+    if _internshala_notified.get(user.id) == _synced_at(user):
+        return  # one notification per synced login, not one per waiting application
+    _internshala_notified[user.id] = _synced_at(user)
     notify(db, user, "session_expired", "Internshala session expired",
            "Internshala showed the bot its sign-up / login page, so the synced login no longer works there. Log into "
            "internshala.com in Chrome (log out and back in if you already are), then click “Sync Internshala "
@@ -980,6 +1007,8 @@ def restage_internshala_waiting(db: Session, user: User) -> int:
         if is_internshala_job(app.job) and not app.form_fields:
             app.needs_manual_review = False
             app.manual_review_reason = None
+            if app.review_decision == "keep":  # prepared while the bot couldn't apply: your keep counts again
+                app.auto_submit = bool(user.prefs.get("auto_submit_kept", True))
             set_status(db, app, ApplicationStatus.PREPARING, "agent", "Filling the Internshala form with the bot")
             enqueue("stage_application", str(app.id), after_commit=db)
             count += 1
@@ -1065,6 +1094,21 @@ def _resume_filename(user: User, ext: str = ".pdf") -> str:
 
 
 def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> Any:
+    if not is_internshala_job(app.job):
+        return _drive_submitter(db, user, app, submit)
+    from app.submitters.base import SubmissionResult
+    from app.submitters.internshala_apply import EXPIRED
+
+    with _internshala_lock(user.id):  # queued runs wait here, then see what the run before them found
+        if internshala_refused(user):
+            return SubmissionResult(False, "failed", error=EXPIRED, session_expired=True)  # no browser opened
+        result = _drive_submitter(db, user, app, submit)
+        if result.session_expired:
+            _internshala_refused[user.id] = time.time()
+        return result
+
+
+def _drive_submitter(db: Session, user: User, app: Application, submit: bool) -> Any:
     from app.services.pdf_generator import render_cover_letter_pdf
     from app.submitters import InternshalaSubmitter, get_submitter
 
@@ -1108,14 +1152,20 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     # Any Internshala posting counts, however it was added (e.g. "Add job by URL"), so the bot never
     # opens your account while it's off.
     if site and not (internshala and internshala_ready(user)):
-        app.auto_submit = False
+        missing = internshala_missing(user) if internshala else None
+        if missing in (None, "bot_off"):  # you apply there yourself (turning the bot on restores auto-submit)
+            app.auto_submit = False
         app.needs_manual_review = True
-        app.manual_review_reason = (f"{site} needs your own {site} login: open the application form, apply there, "
+        app.manual_review_reason = (INTERNSHALA_MISSING[missing] if missing and missing != "bot_off" else
+                                    f"{site} needs your own {site} login: open the application form, apply there, "
                                     "then click “I Applied” so the agent keeps tracking it.")
         app.staged_at = datetime.now(UTC)
         if run:
             run.log(f"{site} posting: your resume and answers are ready; apply on {site} yourself")
-        _mark_ready(db, user, app)
+        if missing == "expired":  # the one "Internshala session expired" notice covers every waiting application
+            set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", "Waiting for a working Internshala login")
+        else:
+            _mark_ready(db, user, app)
         return app
     result = None
     checkpoint(db)
@@ -1153,6 +1203,9 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     else:
         app.needs_manual_review = result.needs_manual_review
         app.manual_review_reason = result.review_reason
+    if result.session_expired and internshala:  # waits for a fresh login; one "session expired" notice covers all
+        set_status(db, app, ApplicationStatus.PENDING_APPROVAL, "agent", "Waiting for a working Internshala login")
+        return app
     if run:
         run.log(f"Staged form on {app.ats_platform.value if app.ats_platform else 'unknown'}: "
                 f"{len([f for f in result.fields if f['status'] == 'filled'])} fields filled"

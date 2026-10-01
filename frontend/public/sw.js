@@ -31,6 +31,8 @@ self.addEventListener("message", (event) => {
       icon: "/icon-192.png",
       badge: "/icon-192.png",
       data: { link: data.link || "/dashboard" },
+      // A burst summary replaces the previous one instead of stacking ("5 new notifications", then "6 …")
+      ...(data.tag ? { tag: data.tag } : {}),
     });
   }
 });

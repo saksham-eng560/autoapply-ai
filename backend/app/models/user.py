@@ -32,6 +32,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "auto_apply_threshold": 80,
     "job_types": ["internship"],  # internships only for now; add "full-time" to widen
     "notification_channels": ["email", "dashboard"],
+    "notification_popups": True,  # off: no pop-ups in the dashboard or the OS; notifications still collect in the bell
     # --- Extended settings ---
     "keywords_exclude": [],
     "posted_within_days": 14,

@@ -56,6 +56,16 @@ def test_preferences_validation(auth_client: TestClient) -> None:
     assert prefs["sources"]["greenhouse_boards"] == ["stripe"] and "lever_companies" in prefs["sources"]
 
 
+def test_notification_popups_can_be_muted(auth_client: TestClient) -> None:
+    """Muting pop-ups is one saved switch; notifications themselves keep being recorded for the bell."""
+    url = "/api/v1/users/me/preferences"
+    assert auth_client.get("/api/v1/auth/me").json()["preferences"]["notification_popups"] is True  # on by default
+    assert auth_client.put(url, json={"preferences": {"notification_popups": "no"}}).status_code == 422
+    assert auth_client.put(url, json={"preferences": {"notification_popups": False}}).json()["notification_popups"] is False
+    assert auth_client.get("/api/v1/auth/me").json()["preferences"]["notification_popups"] is False
+    assert auth_client.put(url, json={"preferences": {"notification_popups": True}}).json()["notification_popups"] is True
+
+
 def test_resume_upload_pdf_and_edit(auth_client: TestClient) -> None:
     pdf = render_resume_pdf(heuristic_parse(SAMPLE_RESUME_TEXT))
     r = auth_client.post("/api/v1/resumes/upload", files={"file": ("resume.pdf", io.BytesIO(pdf), "application/pdf")})
