@@ -125,7 +125,8 @@ def test_progress_digest(auth_client: TestClient, monkeypatch) -> None:
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(notifier, "send_email", lambda to, subject, body, db=None, user=None: sent.append((subject, body)) or True)
     email = _email(auth_client)
-    now = datetime(2026, 10, 1, 14, 50, tzinfo=UTC)  # 20:20 in India (the default time zone)
+    # 20:20 in India (the default time zone), tomorrow: always after the real clock, whatever time the tests run
+    now = (datetime.now(UTC) + timedelta(days=1)).replace(hour=14, minute=50, second=0, microsecond=0)
     old = _seed(email, ApplicationStatus.APPLIED, company="Old Co", submitted_at=now - timedelta(days=10))
     fresh = _seed(email, company="Fresh Co")
     auth_client.post(f"/api/v1/applications/{fresh}/mark-applied")

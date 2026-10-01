@@ -1105,6 +1105,8 @@ def _run_submitter(db: Session, user: User, app: Application, submit: bool) -> A
         result = _drive_submitter(db, user, app, submit)
         if result.session_expired:
             _internshala_refused[user.id] = time.time()
+        elif result.session_cookies:  # Internshala renewed your login while the bot used it: keep the fresh copy
+            user.internshala_session = result.session_cookies
         return result
 
 

@@ -117,6 +117,8 @@ class SubmissionResult:
     error: str | None = None
     session_expired: bool = False
     final_url: str | None = None
+    # The site's login cookies as they stood when the browser closed (it may have renewed them): keep these
+    session_cookies: list[dict[str, Any]] | None = None
 
 
 class BaseSubmitter:
@@ -149,54 +151,65 @@ class BaseSubmitter:
     def _run(self, packet: CandidatePacket, submit: bool) -> SubmissionResult:
         try:
             with self.session_factory(**self.session_kwargs(packet)) as session:
-                page = session.page
+                result = self._drive(session, packet, submit)
                 try:
-                    self.open_application(page, packet)
-                    human.dwell()
-                    result = self.fill(page, packet)
-                    self._solve_captcha(page)
-                    result.screenshot = session.screenshot()
-                    if not submit:
-                        result.stage = "staged"
-                        result.success = True
-                        return result
-                    if result.needs_manual_review and any(f["status"] == "unmapped" and f.get("required") for f in result.fields):
-                        result.success = False
-                        result.stage = "failed"
-                        result.error = result.review_reason or "Required fields could not be filled"
-                        return result
-                    if settings.SUBMISSION_DRY_RUN:
-                        result.success = True
-                        result.stage = "dry_run"
-                        return result
-                    baseline = self.baseline(page)
-                    self.click_submit(page)
-                    self._solve_captcha(page)
-                    ok, number = self.wait_for_confirmation(page, baseline)
-                    result.screenshot = session.screenshot()
-                    result.final_url = page.url
-                    if ok:
-                        result.success = True
-                        result.stage = "submitted"
-                        result.confirmation_number = number
-                    else:
-                        errors = visible_errors(page)
-                        result.success = False
-                        result.stage = "failed"
-                        result.error = "Submission not confirmed" + (f": {'; '.join(errors)}" if errors else "")
-                    return result
-                except SessionExpired as exc:
-                    return SubmissionResult(False, "failed", error=str(exc), session_expired=True,
-                                            screenshot=self._safe_screenshot(session))
-                except (SubmissionError, CaptchaError) as exc:
-                    return SubmissionResult(False, "failed", error=str(exc), screenshot=self._safe_screenshot(session),
-                                            needs_manual_review=True, review_reason=str(exc))
-                except Exception as exc:
-                    logger.exception("%s submitter crashed", self.platform)
-                    return SubmissionResult(False, "failed", error=f"{type(exc).__name__}: {exc}",
-                                            screenshot=self._safe_screenshot(session))
+                    self.after_run(session, result)
+                except Exception:  # never lose the result over bookkeeping
+                    logger.exception("%s: after_run failed", self.platform)
+                return result
         except BrowserUnavailable as exc:
             return SubmissionResult(False, "failed", error=str(exc))
+
+    def after_run(self, session: BrowserSession, result: SubmissionResult) -> None:
+        """Called with the browser still open, after every run (e.g. to keep renewed login cookies)."""
+
+    def _drive(self, session: BrowserSession, packet: CandidatePacket, submit: bool) -> SubmissionResult:
+        page = session.page
+        try:
+            self.open_application(page, packet)
+            human.dwell()
+            result = self.fill(page, packet)
+            self._solve_captcha(page)
+            result.screenshot = session.screenshot()
+            if not submit:
+                result.stage = "staged"
+                result.success = True
+                return result
+            if result.needs_manual_review and any(f["status"] == "unmapped" and f.get("required") for f in result.fields):
+                result.success = False
+                result.stage = "failed"
+                result.error = result.review_reason or "Required fields could not be filled"
+                return result
+            if settings.SUBMISSION_DRY_RUN:
+                result.success = True
+                result.stage = "dry_run"
+                return result
+            baseline = self.baseline(page)
+            self.click_submit(page)
+            self._solve_captcha(page)
+            ok, number = self.wait_for_confirmation(page, baseline)
+            result.screenshot = session.screenshot()
+            result.final_url = page.url
+            if ok:
+                result.success = True
+                result.stage = "submitted"
+                result.confirmation_number = number
+            else:
+                errors = visible_errors(page)
+                result.success = False
+                result.stage = "failed"
+                result.error = "Submission not confirmed" + (f": {'; '.join(errors)}" if errors else "")
+            return result
+        except SessionExpired as exc:
+            return SubmissionResult(False, "failed", error=str(exc), session_expired=True,
+                                    screenshot=self._safe_screenshot(session))
+        except (SubmissionError, CaptchaError) as exc:
+            return SubmissionResult(False, "failed", error=str(exc), screenshot=self._safe_screenshot(session),
+                                    needs_manual_review=True, review_reason=str(exc))
+        except Exception as exc:
+            logger.exception("%s submitter crashed", self.platform)
+            return SubmissionResult(False, "failed", error=f"{type(exc).__name__}: {exc}",
+                                    screenshot=self._safe_screenshot(session))
 
     @staticmethod
     def _safe_screenshot(session: BrowserSession) -> bytes | None:

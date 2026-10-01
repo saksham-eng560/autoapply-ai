@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -187,6 +188,8 @@ PAGES: dict[str, str] = {
     "/student/personal_details": f"<!doctype html><html><body>{HEADER}<h2>Complete your profile to apply</h2><form><input name='city'></form></body></html>",
     "/student/dashboard": f"<!doctype html><html><body>{HEADER}<h2>Dashboard</h2></body></html>",
     "/login/student": "<!doctype html><html><body><form id='login-form'><input name='email'><input name='password' type='password'></form></body></html>",
+    "/registration/student_details": ("<!doctype html><html><body><h1>Complete your profile</h1><form><input name='college'>"
+                                      "</form></body></html>"),
     # What a logged-out visitor's "Apply now" opens (the page in the bug report)
     "/registration/student": ("<!doctype html><html><body><h1>Sign-up and apply for free</h1><p>3,00,000+ companies hiring on "
                               "Internshala</p><div class='card'><h4>Candidate sign up</h4><button>Sign up with Google</button>"
@@ -228,6 +231,8 @@ class MockInternshala:
                 site.agents.append(self.headers.get("User-Agent") or "")
                 if path.startswith("/login"):
                     return self._send(PAGES["/login/student"])
+                if path == "/registration/student_details" and self._logged_in():  # finish-your-profile step
+                    return self._send(PAGES["/registration/student_details"])
                 if path.startswith("/registration"):
                     return self._send(PAGES["/registration/student"])
                 if path.startswith("/internship/detail/public-") and not self._logged_in():  # listings are public
@@ -236,6 +241,11 @@ class MockInternshala:
                     return self._send("", 302, {"Location": f"/login/student?redirect={path}"})
                 if path.startswith(("/internship/detail/easy-", "/internship/detail/public-")):
                     return self._send(easy_detail(path.rsplit("/", 1)[-1]))
+                if path.startswith("/internship/detail/footer-"):  # sign-up text on a page you're logged into
+                    return self._send(easy_detail(path.rsplit("/", 1)[-1]).replace(
+                        "</body>", "<footer><p>Already registered? <a href='/login/student'>Login</a></p></footer></body>"))
+                if path.startswith("/internship/detail/profile-"):
+                    return self._send(_detail('<a class="top_apply_now_cta btn" href="/registration/student_details?next=1">Apply now</a>'))
                 if path in PAGES:
                     return self._send(PAGES[path])
                 return self._send("not found", 404)
@@ -985,3 +995,55 @@ def test_submit_automatically_covers_jobs_kept_before_the_bot_could_apply(auth_c
     assert r.status_code == 200, r.text
     assert [c[0] for c in rec.calls] == ["stage", "submit"]
     assert _app(app_id).status == ApplicationStatus.APPLIED
+
+
+
+@pytest.mark.e2e
+@needs_browser
+def test_a_registration_page_while_logged_in_is_not_an_expired_login(mock_site: MockInternshala) -> None:
+    """Reported: synced, and 5 seconds later "session expired", though Internshala accepted the login (the
+    check script said LOGGED IN). Logged-in students land on /registration/... pages too: the bot now checks
+    your dashboard before blaming the login."""
+    result = InternshalaSubmitter(session_factory=local_session).stage(packet(f"{mock_site.base}/internship/detail/profile-1"))
+    assert not result.success and not result.session_expired
+    assert result.stage == "unavailable" and "/registration/student_details" in (result.error or "")
+    assert "Your login works" in (result.error or "") and "/student/dashboard" in mock_site.requests
+    # Sign-up text in the footer of a page you're logged into: ignored, the form is filled
+    staged = InternshalaSubmitter(session_factory=local_session).stage(packet(f"{mock_site.base}/internship/detail/footer-1"))
+    assert staged.success and staged.stage == "staged", staged.error
+
+
+def test_renewed_login_cookies_are_kept() -> None:
+    """Internshala renews PHPSESSID / l / sessionToken as the bot browses: the bot keeps the fresh ones."""
+    renewed = [{"name": "PHPSESSID", "value": "fresh", "domain": "internshala.com", "path": "/", "expires": -1,
+                "httpOnly": True, "secure": True, "sameSite": "Lax"},
+               {"name": "l", "value": "fresh-l", "domain": "internshala.com", "path": "/", "expires": time.time() + 86400,
+                "httpOnly": True, "secure": True, "sameSite": "None"},
+               {"name": "is_logged_in", "value": "1", "domain": ".internshala.com", "path": "/", "expires": time.time() + 86400,
+                "httpOnly": False, "secure": True, "sameSite": "Lax"},
+               {"name": "_ga", "value": "x", "domain": ".google.com", "path": "/", "expires": -1, "httpOnly": False,
+                "secure": False, "sameSite": "Lax"}]
+    session = SimpleNamespace(context=SimpleNamespace(cookies=lambda: renewed))
+    result = SubmissionResult(True, "staged")
+    InternshalaSubmitter().after_run(session, result)
+    assert [c["name"] for c in result.session_cookies] == ["PHPSESSID", "l", "is_logged_in"]  # Internshala's only
+    assert result.session_cookies[0]["expirationDate"] is None and result.session_cookies[2]["hostOnly"] is False
+    back = ia.internshala_cookies(result.session_cookies)  # what the next run loads into its browser
+    assert [(c["name"], c["domain"], c["sameSite"]) for c in back] == [
+        ("PHPSESSID", "internshala.com", "Lax"), ("l", "internshala.com", "None"), ("is_logged_in", ".internshala.com", "Lax")]
+    expired = SubmissionResult(False, "failed", session_expired=True)
+    InternshalaSubmitter().after_run(session, expired)
+    assert expired.session_cookies is None  # never overwrite your login with a logged-out jar
+
+
+def test_the_app_stores_the_renewed_login(auth_client: TestClient, master_resume: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    fresh = [{**c, "value": "renewed"} if c["name"] == "PHPSESSID" else c for c in SESSION]
+    filled = [{"label": "Cover letter", "kind": "cover_letter", "status": "filled", "required": True, "value": "x", "options": []}]
+    Recorder(monkeypatch, stage=SubmissionResult(True, "staged", fields=filled, answers=[], session_cookies=fresh))
+    app_id = _setup()
+    with SessionLocal() as db:
+        orch.stage_application(db, app_id)
+        db.commit()
+    app = _app(app_id)
+    assert {c["name"]: c["value"] for c in app.user.internshala_session}["PHPSESSID"] == "renewed"
+    assert app.user.internshala_session_valid is True
