@@ -52,7 +52,7 @@ from app.services.application_service import set_status
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
-from app.services.llm import get_llm
+from app.services.llm import get_llm, llm_budget
 from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
 from app.services.notifier import notify, push_update
 from app.services.pdf_generator import render_resume_pdf
@@ -468,8 +468,10 @@ def score_applications(db: Session, user: User, apps: list[Application], master:
             progress.scored += 1
             progress.tick()
 
-    llm_count = settings.MAX_LLM_EVALUATIONS_PER_SCAN
-    parallel = master is not None and get_llm().available and settings.SCAN_LLM_CONCURRENCY > 1
+    # With a local model (Ollama) first, llm_budget() lowers both numbers. Even one call at a time goes
+    # through the pool below, so the long tail gets its instant score while the LLM works.
+    concurrency, llm_count = llm_budget()
+    parallel = master is not None and get_llm().available
     if not parallel:
         for idx, app in enumerate(apps):
             use_llm = idx < llm_count
@@ -498,7 +500,7 @@ def score_applications(db: Session, user: User, apps: list[Application], master:
         else:
             advance()
     checkpoint(db)  # no write lock is held while the LLM works
-    pool = ThreadPoolExecutor(max_workers=max(1, min(settings.SCAN_LLM_CONCURRENCY, len(to_llm))),
+    pool = ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(to_llm))),
                               thread_name_prefix="scan-score")
     futures = {pool.submit(evaluate_match, master.parsed_content, snap, prefs, threshold, use_llm=True): (app, heads_up)
                for app, heads_up, snap in to_llm}

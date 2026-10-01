@@ -5,6 +5,11 @@ const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
   poweredByHeader: false,
+  experimental: {
+    // A local AI model (Ollama) without a GPU can take minutes to answer (resume parsing, Test AI);
+    // Next's default 30 s proxy timeout would cut those /api requests off.
+    proxyTimeout: 15 * 60 * 1000,
+  },
   // Same-origin proxy (BFF): the browser only talks to the dashboard's origin, so the
   // httpOnly session cookie is first-party in every deployment topology.
   async rewrites() {

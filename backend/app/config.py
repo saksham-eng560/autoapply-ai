@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,12 +16,21 @@ REPO_ROOT = BACKEND_DIR.parent
 logger = logging.getLogger(__name__)
 
 DEFAULT_SECRET = "change-me-in-production-please-use-a-long-random-string"  # noqa: S105 - placeholder, rejected in prod
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"  # used when LLM_PROVIDER=ollama and OLLAMA_MODEL is empty
+LLM_PROVIDERS = ("auto", "anthropic", "openai", "ollama")
 
 
 def _csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+@lru_cache
+def in_container() -> bool:
+    """True inside a Docker / Podman container."""
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
 
 
 class Settings(BaseSettings):
@@ -73,7 +83,19 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MAX_RETRIES: int = 3
     LLM_TIMEOUT_SECONDS: float = 300.0
-    EMBEDDING_PROVIDER: str = "local"  # local | openai
+    LLM_PROVIDER: str = "auto"  # auto (Anthropic -> OpenAI -> Ollama, whichever is set up) | anthropic | openai | ollama
+    # Ollama: free models on your own machine / server, or Ollama Cloud (https://ollama.com)
+    OLLAMA_BASE_URL: str = DEFAULT_OLLAMA_URL
+    OLLAMA_MODEL: str = ""  # e.g. qwen3.5:4b; empty = Ollama off (unless LLM_PROVIDER=ollama)
+    OLLAMA_API_KEY: str | None = None  # only for Ollama Cloud (https://ollama.com/settings/keys)
+    OLLAMA_NUM_CTX: int = 8192  # context window in tokens (Ollama's own default is only 4096)
+    OLLAMA_KEEP_ALIVE: str = "30m"  # keep the model loaded between calls
+    OLLAMA_TIMEOUT_SECONDS: float = 600.0  # one answer on a CPU-only server can take minutes
+    OLLAMA_CONCURRENCY: int = 1  # Ollama calls in flight per process (CPU servers: 1-2)
+    OLLAMA_MAX_EVALUATIONS_PER_SCAN: int = 15  # caps MAX_LLM_EVALUATIONS_PER_SCAN when Ollama is primary
+    OLLAMA_THINK: bool = False  # let thinking models (qwen3.5, gpt-oss…) reason first: better, much slower
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"  # used with EMBEDDING_PROVIDER=ollama
+    EMBEDDING_PROVIDER: str = "local"  # local | openai | ollama
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
 
@@ -167,6 +189,49 @@ class Settings(BaseSettings):
     @property
     def google_configured(self) -> bool:
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
+
+    @property
+    def llm_provider(self) -> str:
+        """LLM_PROVIDER, normalised: empty or unknown values mean ``auto``."""
+        choice = (self.LLM_PROVIDER or "").strip().lower() or "auto"
+        return choice if choice in LLM_PROVIDERS else "auto"
+
+    @property
+    def ollama_model(self) -> str:
+        model = (self.OLLAMA_MODEL or "").strip()
+        if not model and self.llm_provider == "ollama":
+            return DEFAULT_OLLAMA_MODEL
+        return model
+
+    @property
+    def ollama_enabled(self) -> bool:
+        return bool(self.ollama_model)
+
+    @property
+    def ollama_base_url(self) -> str:
+        """OLLAMA_BASE_URL without a trailing ``/api`` or ``/v1``.
+
+        Inside a container ``localhost`` is the container itself, so a localhost URL points at the
+        machine running Docker instead (``host.docker.internal``: the Ollama app on your Mac)."""
+        url = (self.OLLAMA_BASE_URL or "").strip().rstrip("/") or DEFAULT_OLLAMA_URL
+        for suffix in ("/api", "/v1"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)]
+        parts = urlsplit(url)
+        if parts.hostname in ("localhost", "127.0.0.1") and in_container():
+            url = urlunsplit(parts._replace(netloc=parts.netloc.replace(parts.hostname, "host.docker.internal", 1)))
+        return url
+
+    @property
+    def ollama_is_cloud(self) -> bool:
+        """The Ollama Cloud API itself (https://ollama.com), which needs OLLAMA_API_KEY."""
+        host = urlsplit(self.ollama_base_url).hostname or ""
+        return host == "ollama.com" or host.endswith(".ollama.com")
+
+    @property
+    def ollama_cloud_model(self) -> bool:
+        """A cloud model: on ollama.com, or a ``-cloud`` model through a signed-in local Ollama."""
+        return self.ollama_is_cloud or self.ollama_model.endswith(("-cloud", ":cloud"))
 
     @property
     def is_sqlite(self) -> bool:

@@ -2,6 +2,8 @@
 #   1. Point DNS for $DOMAIN at the server.
 #   2. cp .env.example .env and set DOMAIN, SECRET_KEY, ENCRYPTION_KEY, POSTGRES_PASSWORD (+ API keys).
 #   3. docker compose -f docker-compose.prod.yml up -d --build
+# Free AI on this server: WITH_OLLAMA=1 scripts/server-setup.sh, or COMPOSE_PROFILES=ollama,
+# LLM_PROVIDER=ollama, OLLAMA_BASE_URL=http://ollama:11434 and OLLAMA_MODEL=qwen3.5:4b in .env (README).
 # For AWS ECS/Fargate + Vercel see .github/workflows/deploy-*.yml and README.md.
 name: autoapply-prod
 
@@ -25,6 +27,8 @@ x-backend: &backend
     ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY}
   volumes:
     - storage:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"  # an Ollama installed on the server itself (not in Docker)
   depends_on:
     postgres:
       condition: service_healthy
@@ -125,9 +129,35 @@ services:
       - api
     restart: always
 
+  # Free local AI model server, only with the "ollama" profile (COMPOSE_PROFILES=ollama in .env).
+  # The app reaches it at http://ollama:11434 on the internal network. Ollama's API has no
+  # authentication: never publish port 11434 on a public server.
+  ollama:
+    image: ollama/ollama
+    profiles: ["ollama"]
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_NUM_CTX:-8192}
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+    restart: always
+    deploy:
+      resources:
+        limits: { memory: 16g }
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
 volumes:
   pgdata:
   redisdata:
   storage:
   caddy_data:
   caddy_config:
+  ollama-models:
