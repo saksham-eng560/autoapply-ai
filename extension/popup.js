@@ -1,5 +1,17 @@
 const $ = (id) => document.getElementById(id);
 
+// No answer from the background worker means Chrome is still running an older copy of the extension
+// (it picks up new background code and permissions only on a reload).
+const RELOAD = "Reload the extension: open chrome://extensions, click ↻ on AutoApply AI, then open this popup again.";
+
+async function ask(message) {
+  try {
+    return (await chrome.runtime.sendMessage(message)) || { ok: false, error: RELOAD };
+  } catch (err) {
+    return { ok: false, error: `${RELOAD} (${err.message || err})` };
+  }
+}
+
 function setMessage(text, ok, id = "message") {
   const el = $(id);
   el.textContent = text || "";
@@ -13,13 +25,19 @@ function showLogin(id, loggedIn) {
 }
 
 async function refresh() {
-  const status = await chrome.runtime.sendMessage({ type: "status" });
+  const status = await ask({ type: "status" });
   if (status.dashboardUrl) $("dashboardUrl").value = status.dashboardUrl;
   $("token").placeholder = status.token ? "•••••••• (saved — paste to replace)" : $("token").placeholder;
   showLogin("login", status.loggedIn);
   $("lastSync").textContent = status.lastSync ? new Date(status.lastSync).toLocaleString() : "never";
-  if (status.lastError) setMessage(status.lastError, false);
-  const internshala = status.internshala || {};
+  if (status.lastError || status.error) setMessage(status.lastError || status.error, false);
+  if (!status.internshala) {  // a background from before Internshala support
+    $("internshalaLogin").textContent = "reload needed";
+    $("internshalaLogin").className = "err";
+    setMessage(RELOAD, false, "internshalaMessage");
+    return;
+  }
+  const { internshala } = status;
   showLogin("internshalaLogin", internshala.loggedIn);
   $("internshalaLastSync").textContent = internshala.lastSync ? new Date(internshala.lastSync).toLocaleString() : "never";
   if (internshala.lastError) setMessage(internshala.lastError, false, "internshalaMessage");
@@ -53,7 +71,7 @@ $("config").addEventListener("submit", async (event) => {
 $("sync").addEventListener("click", async () => {
   $("sync").disabled = true;
   $("sync").textContent = "Syncing…";
-  const result = await chrome.runtime.sendMessage({ type: "sync" });
+  const result = await ask({ type: "sync" });
   $("sync").disabled = false;
   $("sync").textContent = "Sync LinkedIn session";
   setMessage(result.ok ? "Synced! Easy Apply is ready in your dashboard." : result.error, result.ok);
@@ -63,7 +81,7 @@ $("sync").addEventListener("click", async () => {
 $("syncInternshala").addEventListener("click", async () => {
   $("syncInternshala").disabled = true;
   $("syncInternshala").textContent = "Syncing…";
-  const result = await chrome.runtime.sendMessage({ type: "sync-internshala" });
+  const result = await ask({ type: "sync-internshala" });
   $("syncInternshala").disabled = false;
   $("syncInternshala").textContent = "Sync Internshala session";
   setMessage(result.ok ? "Synced! Turn on the Internshala bot in Settings → Integrations." : result.error, result.ok,
