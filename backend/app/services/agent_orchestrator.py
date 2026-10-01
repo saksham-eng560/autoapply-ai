@@ -899,6 +899,8 @@ def build_packet(db: Session, user: User, app: Application, resume_path: str | N
         application_url=job.application_url or job.source_url,
         company_name=job.company_name,
         role_title=job.role_title,
+        # Your corrections from the "Ready to submit" queue beat everything the agent worked out
+        overrides={str(k): "" if v is None else str(v) for k, v in (app.field_overrides or {}).items()},
     )
 
 
@@ -994,7 +996,7 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
 
 # --------------------------------------------------------------------------- approval & submission
 def approve_application(db: Session, app: Application, cover_letter: str | None = None,
-                        custom_answers: list[dict[str, Any]] | None = None) -> Application:
+                        custom_answers: list[dict[str, Any]] | None = None, note: str = "Approved by user") -> Application:
     if app.status not in (ApplicationStatus.PENDING_APPROVAL, ApplicationStatus.FAILED, ApplicationStatus.MATCHED):
         raise ValueError(f"Cannot approve an application in status '{app.status.value}'")
     if cover_letter is not None:
@@ -1003,7 +1005,7 @@ def approve_application(db: Session, app: Application, cover_letter: str | None 
         app.custom_answers = [{**a, "needs_user_review": False, "source": a.get("source") or "user"} for a in custom_answers]
         remember_answers(db, app.user_id, custom_answers)
     app.retry_count = 0
-    set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved by user")
+    set_status(db, app, ApplicationStatus.APPROVED, "user", note)
     from app.worker.dispatch import enqueue
 
     db.flush()

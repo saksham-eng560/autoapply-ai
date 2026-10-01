@@ -29,6 +29,19 @@ logger = logging.getLogger(__name__)
 
 AnswerResolver = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
 
+#: Profile values a form field can be classified as (``CandidatePacket.profile_value``).
+PROFILE_KINDS = ("first_name", "last_name", "full_name", "email", "phone", "location", "linkedin", "github",
+                 "portfolio", "current_company", "current_title")
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def override_key(label: str) -> str:
+    """Key of one form field in ``CandidatePacket.overrides`` (and ``Application.field_overrides``)."""
+    return f"label:{_norm(label)}"
+
 
 class SubmissionError(Exception):
     pass
@@ -60,12 +73,20 @@ class CandidatePacket:
     application_url: str = ""
     company_name: str = ""
     role_title: str = ""
+    #: Your corrections from the review queue: a profile kind ("email") or ``override_key(label)`` -> value.
+    #: They win over the profile, stored answers and generated answers alike.
+    overrides: dict[str, str] = field(default_factory=dict)
 
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
+    def override_for(self, label: str) -> str | None:
+        return self.overrides.get(override_key(label)) if self.overrides else None
+
     def profile_value(self, key: str) -> str | None:
+        if key in self.overrides:
+            return str(self.overrides[key]) or None
         return {
             "first_name": self.first_name,
             "last_name": self.last_name,
@@ -94,10 +115,6 @@ class SubmissionResult:
     error: str | None = None
     session_expired: bool = False
     final_url: str | None = None
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
 class BaseSubmitter:
@@ -237,6 +254,11 @@ class BaseSubmitter:
                 elif kind == "cover_letter":
                     ok = fill_field(page, f, packet.cover_letter_text)
                     report.append(self._report(f, kind, (packet.cover_letter_text or "")[:80], ok))
+                continue
+            override = packet.override_for(f.label or f.name or f.handle)
+            if override is not None:  # you corrected this field in the review queue: your value, verbatim
+                ok = (bool(f.value) and _norm(f.value) == _norm(override)) or fill_field(page, f, override)
+                report.append({**self._report(f, kind or "question", override, ok), "source": "user"})
                 continue
             if kind:
                 value = packet.profile_value(kind)

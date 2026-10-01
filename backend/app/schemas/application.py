@@ -30,6 +30,18 @@ class ApproveRequest(BaseModel):
     custom_answers: list[CustomAnswer] | None = None
 
 
+class ReviewRowIn(BaseModel):
+    """One row of the "Ready to submit" sheet you confirmed (value unchanged) or corrected."""
+
+    key: str = Field(min_length=1, max_length=600)
+    value: str = Field(default="", max_length=20000)
+
+
+class DirectSubmitRequest(BaseModel):
+    rows: list[ReviewRowIn] = Field(default_factory=list, max_length=500)
+    cover_letter: str | None = Field(default=None, max_length=20000)
+
+
 class TailoredResumeUpdate(BaseModel):
     parsed_content: dict[str, Any]
 
