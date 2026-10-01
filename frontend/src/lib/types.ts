@@ -39,6 +39,13 @@ export interface Preferences {
   progress_digest?: "daily" | "weekly" | "off";
   /** false: notifications only collect in the bell, with no pop-ups in the dashboard or the OS. */
   notification_popups?: boolean;
+  /** At most this % of each scan's new postings come from Internshala (default 25). */
+  internshala_share?: number;
+  skip_suspicious_companies?: boolean;
+  /** Companies you marked legit: applied to automatically like verified ones. */
+  trusted_companies?: string[];
+  /** Every scan also searches big tech, product companies, top startups and AI companies. */
+  scan_top_companies?: boolean;
   review_mode: "swipe" | "auto";
   auto_submit_kept: boolean;
   trust_generated_answers: boolean;
@@ -115,6 +122,29 @@ export interface Job {
   is_active: boolean;
   description?: string;
   application?: JobApplicationRef;
+  /** The company-check agent: only verified companies are applied to automatically. */
+  company?: CompanyCheck;
+}
+
+export type CompanyVerdict = "verified" | "unverified" | "suspicious";
+export type CompanyTier = "big_tech" | "product" | "startup_india" | "startup_global" | "ai";
+
+export interface CompanyCheck {
+  verdict: CompanyVerdict | null;
+  score: number | null;
+  reasons: string[];
+  /** rules · ai · you (you marked it legit) */
+  method: string | null;
+  tier: CompanyTier | null;
+  tier_label: string | null;
+}
+
+export interface TopCompanies {
+  tiers: { key: CompanyTier; label: string; count: number }[];
+  total: number;
+  items: Job[];
+  catalog: Record<CompanyTier, string[]>;
+  scan_top_companies: boolean;
 }
 
 export interface CustomAnswer {

@@ -14,6 +14,7 @@ from app.models.application import Application
 from app.models.enums import ApplicationStatus
 from app.schemas.agent import StartScanRequest
 from app.scrapers import SCRAPERS
+from app.services import agent_orchestrator as orch
 from app.services.agent_orchestrator import get_master_resume
 from app.services.notifier import push_update
 from app.services.rate_limiter import rate_limiter
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 @router.post("/start-scan", status_code=202)
 def start_scan(body: StartScanRequest, user: CurrentUser, db: DB) -> dict:
-    platforms = body.platforms or user.prefs.get("platforms") or list(SCRAPERS)
+    platforms = orch.scan_platforms(user.prefs, body.platforms)  # your sources, plus the top companies
     unknown = [p for p in platforms if p not in SCRAPERS]
     if unknown:
         raise HTTPException(422, f"Unknown platforms: {unknown}")

@@ -12,7 +12,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import DB, CurrentUser, parse_uuid
@@ -106,7 +106,7 @@ def _card(app: Application, prefs: dict | None = None) -> dict:  # type: ignore[
         "heads_up": details.get("heads_up") or [],
         "scores": {k: details.get(k) for k in ("skills_match", "experience_match", "industry_match", "location_match",
                                                "compensation_match") if details.get(k) is not None},
-        "job": {**job_out(job), "description": (job.description or "")[:2500],
+        "job": {**job_out(job, prefs=prefs), "description": (job.description or "")[:2500],
                 "sponsorship": (job.raw_data or {}).get("sponsorship"),
                 "terms": (job.raw_data or {}).get("terms") or [],
                 "listing_source": (job.raw_data or {}).get("listing_source")},
@@ -144,9 +144,14 @@ def queue(
     remote: bool | None = None,
     q: str | None = None,
 ) -> dict:
+    orch.backfill_company_checks(db, limit=500)  # postings saved before the company check existed
+    orch.skip_suspicious_waiting(db, user)
     filtered = _queue_query(user, min_score, job_type, remote, q)
     prefs = user.prefs
+    trust = case((Job.company_tier.is_not(None), 0), (Job.company_verdict == "verified", 1),
+                 (Job.company_verdict == "suspicious", 3), else_=2)
     query = filtered.order_by(
+        trust,  # renowned companies first, then verified ones, then the rest
         *_focus_order(prefs),  # prime city first, then the rest of the focus country; the target season first
         Application.match_score.desc().nulls_last(), Job.posted_date.desc().nulls_last(), Job.discovered_at.desc(),
         Application.id)  # stable order: refetches must not reshuffle the deck

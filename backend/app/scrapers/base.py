@@ -42,6 +42,9 @@ class SearchQuery:
     posted_within_days: int = 14
     limit: int = 50
     sources: dict[str, Any] = field(default_factory=dict)
+    # What to type into a site's search box when it differs from the target roles (e.g. "Google intern");
+    # titles are still matched against ``keywords``.
+    search_terms: list[str] | None = None
     focus: LocationFocus | None = None  # e.g. India with Delhi NCR first (see services/location_focus.py)
     # Postings already in the database: scrapers skip re-downloading their detail pages.
     known_urls: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)

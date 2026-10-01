@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import anyio
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 
 from app.api.deps import DB, CurrentUser, parse_uuid
@@ -15,6 +16,7 @@ from app.schemas.job import JobImportRequest
 from app.scrapers import ScraperError
 from app.services import agent_orchestrator as orch
 from app.services.application_service import set_status
+from app.services.company_catalog import CATALOG, TIERS, normalize_company
 from app.worker.dispatch import enqueue
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -64,7 +66,80 @@ def list_jobs(
         "company": (Job.company_name.asc(),),
     }.get(sort, (Job.discovered_at.desc(),))
     rows = db.execute(query.order_by(*order).offset((page - 1) * page_size).limit(page_size)).all()
-    return {"items": [job_out(job, app) for job, app in rows], "total": total, "page": page, "page_size": page_size}
+    return {"items": [job_out(job, app, user.prefs) for job, app in rows], "total": total, "page": page,
+            "page_size": page_size}
+
+
+@router.get("/top-companies")
+def top_companies(user: CurrentUser, db: DB, tier: str | None = None, q: str | None = None,
+                  limit: int = Query(default=200, ge=1, le=500)) -> dict:
+    """Internships at big tech, product companies, renowned Indian / global startups and AI companies."""
+    if tier and tier not in TIERS:
+        raise HTTPException(422, "Unknown tier")
+    orch.backfill_company_checks(db)
+    base = (select(Job, Application)
+            .join(Application, and_(Application.job_id == Job.id, Application.user_id == user.id))
+            .where(Job.is_active.is_(True), Job.company_tier.is_not(None)))
+    counts = dict(db.execute(select(Job.company_tier, func.count()).select_from(Job)
+                             .join(Application, and_(Application.job_id == Job.id, Application.user_id == user.id))
+                             .where(Job.is_active.is_(True), Job.company_tier.is_not(None))
+                             .group_by(Job.company_tier)).all())
+    if tier:
+        base = base.where(Job.company_tier == tier)
+    if q:
+        like = f"%{q.lower()}%"
+        base = base.where(or_(func.lower(Job.role_title).like(like), func.lower(Job.company_name).like(like),
+                              func.lower(Job.location).like(like)))
+    rows = db.execute(base.order_by(Application.match_score.desc().nulls_last(), Job.discovered_at.desc()).limit(limit)).all()
+    prefs = user.prefs
+    return {
+        "tiers": [{"key": key, "label": label, "count": counts.get(key, 0)} for key, label in TIERS.items()],
+        "total": sum(counts.values()),
+        "items": [job_out(job, app, prefs) for job, app in rows],
+        "catalog": {key: [c.name for c in CATALOG if c.tier == key] for key in TIERS},
+        "scan_top_companies": bool(prefs.get("scan_top_companies", True)),
+    }
+
+
+class CompanyTrustIn(BaseModel):
+    company: str = Field(min_length=1, max_length=255)
+    trusted: bool | None  # true: legit · false: not legit (avoid) · null: back to the agent's verdict
+
+
+@router.post("/company-trust")
+def company_trust(body: CompanyTrustIn, user: CurrentUser, db: DB) -> dict:
+    """Your word on a company beats the company check. Legit: the agent applies to it automatically (and sends
+    what was waiting only for that). Not legit: it's avoided and its waiting jobs are skipped."""
+    name = body.company.strip()
+    key = normalize_company(name)
+    if not key:
+        raise HTTPException(422, "Company name required")
+    prefs = user.prefs
+    trusted = [t for t in prefs.get("trusted_companies") or [] if normalize_company(t) != key]
+    avoid = [a for a in prefs.get("companies_to_avoid") or [] if normalize_company(a) != key]
+    if body.trusted is True:
+        trusted.append(name)
+    elif body.trusted is False:
+        avoid.append(name)
+    user.preferences = {**(user.preferences or {}), "trusted_companies": trusted, "companies_to_avoid": avoid}
+    mine = db.scalars(select(Application).join(Job, Job.id == Application.job_id)
+                      .where(Application.user_id == user.id,
+                             Application.status.in_((ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED,
+                                                     ApplicationStatus.PENDING_APPROVAL)))).all()
+    mine = [a for a in mine if normalize_company(a.job.company_name) == key]
+    changed = 0
+    for app in mine:
+        if body.trusted is False:
+            app.match_reasoning = f"You marked {name} as not legit"
+            set_status(db, app, ApplicationStatus.SKIPPED, "user", app.match_reasoning)
+            changed += 1
+        elif body.trusted is True and app.status == ApplicationStatus.PENDING_APPROVAL \
+                and (app.manual_review_reason or "").startswith("Not sent automatically:"):
+            app.needs_manual_review = False
+            app.manual_review_reason = None
+            orch.ready_or_submit(db, user, app)  # held only because the company wasn't verified
+            changed += 1
+    return {"company": name, "trusted": body.trusted, "applications_updated": changed}
 
 
 @router.get("/{job_id}")

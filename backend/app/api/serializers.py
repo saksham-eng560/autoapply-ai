@@ -15,6 +15,7 @@ from app.models.interview import Interview
 from app.models.job import Job
 from app.models.resume import Resume
 from app.models.user import Notification, User
+from app.services.company_verifier import summary as company_summary
 
 
 def iso(value: datetime | date | None) -> str | None:
@@ -53,7 +54,8 @@ def user_out(user: User) -> dict[str, Any]:
 MANUAL_URL_PREFIX = "https://manual.autoapply.invalid/"  # applications you logged without a link
 
 
-def job_out(job: Job, application: Application | None = None) -> dict[str, Any]:
+def job_out(job: Job, application: Application | None = None, prefs: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``prefs``: your own "Mark legit" choices shown in the company verdict."""
     out = {
         "id": str(job.id),
         "company_name": job.company_name,
@@ -75,6 +77,7 @@ def job_out(job: Job, application: Application | None = None) -> dict[str, Any]:
         "deadline_date": iso(job.deadline_date),
         "discovered_at": iso(job.discovered_at),
         "is_active": job.is_active,
+        "company": company_summary(job, prefs),
     }
     if application is not None:
         out["application"] = {
@@ -87,8 +90,10 @@ def job_out(job: Job, application: Application | None = None) -> dict[str, Any]:
     return out
 
 
-def job_detail_out(job: Job, application: Application | None = None) -> dict[str, Any]:
-    return {**job_out(job, application), "description": job.description, "requirements": job.requirements,
+def job_detail_out(job: Job, application: Application | None = None, prefs: dict[str, Any] | None = None) -> dict[str, Any]:
+    if prefs is None and application is not None and application.user is not None:
+        prefs = application.user.prefs
+    return {**job_out(job, application, prefs), "description": job.description, "requirements": job.requirements,
             "nice_to_haves": job.nice_to_haves}
 
 
@@ -111,7 +116,7 @@ def application_summary(app: Application, self_applied: bool | None = None) -> d
         "created_at": iso(app.created_at),
         "updated_at": iso(app.updated_at),
         "submitted_at": iso(app.submitted_at),
-        "job": job_out(job) if job else None,
+        "job": job_out(job, prefs=app.user.prefs if app.user is not None else None) if job else None,
     }
 
 
@@ -144,7 +149,7 @@ def application_detail(app: Application, communications: list[Communication], in
     out = application_summary(app)
     out.update(
         {
-            "job": job_detail_out(app.job) if app.job else None,
+            "job": job_detail_out(app.job, prefs=app.user.prefs if app.user is not None else None) if app.job else None,
             "match_details": app.match_details,
             "similarity_score": app.similarity_score,
             "cover_letter": app.cover_letter,

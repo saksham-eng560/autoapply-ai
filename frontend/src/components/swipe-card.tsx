@@ -3,6 +3,7 @@
 import { forwardRef, useImperativeHandle, useState } from "react";
 import { animate, motion, useMotionValue, useTransform, type PanInfo } from "framer-motion";
 import { AlertTriangle, ArrowUpRight, Building2, CalendarDays, Globe2, Loader2, MapPin, Sparkles } from "lucide-react";
+import { CompanyBadge } from "@/components/company-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewCard } from "@/lib/types";
@@ -100,6 +101,7 @@ export const SwipeCard = forwardRef<SwipeCardHandle, {
             {job.location && <span className="inline-flex min-w-0 items-center gap-1.5"><MapPin className="h-4 w-4 shrink-0" /><span className="truncate">{job.location}</span></span>}
             {job.is_remote && <span className="inline-flex items-center gap-1.5"><Globe2 className="h-4 w-4" />Remote</span>}
           </div>
+          <CompanyBadge company={job.company_name} check={job.company} className="mt-3" />
         </div>
         <div className="flex shrink-0 flex-col items-end">
           <span className={cn("font-display text-5xl leading-none tabular-nums", score != null && score >= 70 ? "text-primary" : "text-foreground")}>

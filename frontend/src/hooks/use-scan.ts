@@ -47,10 +47,11 @@ export function useScan() {
 
   const { data: finished } = useSWR<AgentRun>(finishedId ? `/agent/runs/${finishedId}` : null, fetcher);
 
-  const start = useCallback(async () => {
+  /** Start a scan: your saved sources (plus the top companies), or only `platforms` when given. */
+  const start = useCallback(async (platforms?: unknown) => {
     setStarting(true);
     try {
-      await post("/agent/start-scan", {});
+      await post("/agent/start-scan", Array.isArray(platforms) ? { platforms } : {}); // (a click event is not a list)
       toast({ title: "Scan started", description: "Watch the progress bar; jobs land in Swipe Review as they're scored.", tone: "success" });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {

@@ -84,6 +84,15 @@ def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
     limit = prefs.get("internshala_daily_limit")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 25:
         raise HTTPException(422, "internshala_daily_limit must be 1-25")
+    share = prefs.get("internshala_share")
+    if not isinstance(share, int) or isinstance(share, bool) or not 0 <= share <= 100:
+        raise HTTPException(422, "internshala_share must be 0-100")
+    for key in ("skip_suspicious_companies", "scan_top_companies"):
+        if not isinstance(prefs.get(key), bool):
+            raise HTTPException(422, f"{key} must be true or false")
+    trusted = prefs.get("trusted_companies")
+    if not isinstance(trusted, list) or len(trusted) > 500 or not all(isinstance(t, str) and len(t) <= 255 for t in trusted):
+        raise HTTPException(422, "trusted_companies must be a list of company names")
 
 
 @router.put("/preferences")

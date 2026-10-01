@@ -67,6 +67,11 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "internshala_bot_enabled": False,  # fill Internshala applications with your synced Internshala login
     "internshala_auto_submit": False,  # send them without your click (otherwise they wait for you)
     "internshala_daily_limit": 15,     # at most this many Internshala applications a day (1-25)
+    "internshala_share": 25,           # at most this % of each scan's new postings come from Internshala (0-100)
+    # --- Company check (services/company_verifier.py) ---
+    "skip_suspicious_companies": True,  # postings with scam signs (fees, WhatsApp-only, MLM...) are skipped
+    "trusted_companies": [],            # companies you marked legit: applied to automatically like verified ones
+    "scan_top_companies": True,         # every scan also searches big tech, product companies, top startups, AI
     "sources": {
         # ATS boards to crawl directly (public APIs, no login needed)
         "greenhouse_boards": [],   # e.g. ["stripe", "airbnb"]
