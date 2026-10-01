@@ -693,14 +693,15 @@ function IntegrationsPanel() {
   const [token, setToken] = useState<{ token: string; api_url: string } | null>(null);
   const [webhooks, setWebhooks] = useState({ discord: "", slack: "" });
   const [channels, setChannels] = useState<string[]>([]);
-  const [progress, setProgress] = useState<{ everywhere: boolean; digest: "daily" | "weekly" | "off" }>({ everywhere: true, digest: "daily" });
+  const [progress, setProgress] = useState<{ everywhere: boolean; digest: "daily" | "weekly" | "off"; popups: boolean }>({ everywhere: true, digest: "daily", popups: true });
   const { saving, run } = useSaver();
   const toast = useToast();
   useEffect(() => {
     if (me) {
       setWebhooks({ discord: me.preferences.discord_webhook_url || "", slack: me.preferences.slack_webhook_url || "" });
       setChannels(me.preferences.notification_channels);
-      setProgress({ everywhere: me.preferences.progress_updates_everywhere ?? true, digest: me.preferences.progress_digest ?? "daily" });
+      setProgress({ everywhere: me.preferences.progress_updates_everywhere ?? true, digest: me.preferences.progress_digest ?? "daily",
+        popups: me.preferences.notification_popups !== false });
     }
   }, [me]);
   if (!integ) return null;
@@ -780,7 +781,7 @@ function IntegrationsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Notifications</CardTitle>
-          <CardDescription>Dashboard alerts are always on. E-mail uses SMTP when configured, otherwise your connected Gmail.</CardDescription>
+          <CardDescription>Everything always collects in the bell (top right). E-mail uses SMTP when configured, otherwise your connected Gmail.</CardDescription>
         </CardHeader>
         <CardContent>
           <Row label="Channels">
@@ -790,6 +791,9 @@ function IntegrationsPanel() {
                   className={cn(pill(channels.includes(c)), "capitalize")} aria-pressed={channels.includes(c)}>{c}</button>
               ))}
             </div>
+          </Row>
+          <Row label="Pop-ups" hint="Off: nothing pops up, in the dashboard or as a system notification. Everything still collects in the bell (top right) and goes to your other channels. Also in the bell: Mute pop-ups.">
+            <Switch checked={progress.popups} onCheckedChange={(v) => setProgress({ ...progress, popups: v })} label="Show notification pop-ups" />
           </Row>
           <Row label="Browser notifications" hint="System notifications while the dashboard is open in the background.">
             <Button variant="outline" size="sm" onClick={async () => {
@@ -811,7 +815,7 @@ function IntegrationsPanel() {
           <div className="pt-4">
             <Button loading={saving} onClick={() => run(async () => {
               await put("/users/me/preferences", { preferences: { notification_channels: channels, discord_webhook_url: webhooks.discord || null, slack_webhook_url: webhooks.slack || null,
-                progress_updates_everywhere: progress.everywhere, progress_digest: progress.digest } });
+                progress_updates_everywhere: progress.everywhere, progress_digest: progress.digest, notification_popups: progress.popups } });
               await mutateMe();
               await mutate();
             })}><Save /> Save notifications</Button>

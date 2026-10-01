@@ -108,6 +108,8 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser, db: DB) -> di
     per_source = prefs.get("max_jobs_per_source")
     if per_source is not None and (not isinstance(per_source, int) or not 10 <= per_source <= 1000):
         raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
+    if not isinstance(prefs.get("notification_popups"), bool):
+        raise HTTPException(422, "notification_popups must be true or false")
     _validate_focus(prefs)
     _validate_internshala(prefs)
     turned_on = prefs["internshala_bot_enabled"] and not user.prefs.get("internshala_bot_enabled")
