@@ -1,11 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "AutoApply AI — LinkedIn Session Sync",
+  "name": "AutoApply AI — Session Sync",
   "short_name": "AutoApply AI",
-  "version": "1.0.0",
-  "description": "Securely syncs your LinkedIn session to your AutoApply AI dashboard so the agent can use Easy Apply and keep your resume current.",
+  "version": "1.1.0",
+  "description": "Securely syncs your LinkedIn and Internshala sessions to your own AutoApply AI dashboard so the agent can apply with your accounts.",
   "permissions": ["cookies", "storage", "alarms"],
-  "host_permissions": ["https://www.linkedin.com/*", "https://*.linkedin.com/*"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.linkedin.com/*",
+    "https://internshala.com/*",
+    "https://*.internshala.com/*"
+  ],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [

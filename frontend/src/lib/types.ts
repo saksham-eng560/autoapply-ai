@@ -44,6 +44,12 @@ export interface Preferences {
   auto_keep_min_score: number | null;
   max_jobs_per_source: number | null;
   exclude_no_sponsorship: boolean;
+  /** Opt-in Internshala apply bot (uses your Internshala login synced by the extension). */
+  internshala_bot_enabled?: boolean;
+  /** Send Internshala applications without your click (off: they wait in your review queue). */
+  internshala_auto_submit?: boolean;
+  /** At most this many Internshala applications a day (1–25). */
+  internshala_daily_limit?: number;
   discord_webhook_url: string | null;
   slack_webhook_url: string | null;
   timezone: string;
@@ -369,6 +375,8 @@ export interface NotificationItem {
 export interface Integrations {
   google: { configured: boolean; connected: boolean; email: string | null; gmail: boolean; calendar: boolean; last_polled_at: string | null; push_enabled: boolean };
   linkedin: { connected: boolean; session_valid: boolean; updated_at: string | null; profile_diff: { has_changes: boolean; changes: { section: string; change: string; linkedin_value: string }[]; summary: string } | null; synced_at: string | null };
+  /** The synced Internshala login (never the cookies themselves) and the bot's switches. */
+  internshala: { connected: boolean; session_valid: boolean; updated_at: string | null; bot_enabled: boolean; auto_submit: boolean; daily_limit: number };
   llm: { providers: string[]; model: string | null; embedding_provider: string };
   automation: { proxies: number; captcha: boolean; dry_run: boolean; auto_stage: boolean };
   notifications: { smtp: boolean; discord: boolean; slack: boolean };

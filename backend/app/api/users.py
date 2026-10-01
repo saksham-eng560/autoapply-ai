@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -10,6 +11,7 @@ from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, ExtensionUser
 from app.api.serializers import user_out
+from app.automation.browser import BrowserUnavailable
 from app.automation.proxy import proxy_manager
 from app.config import settings
 from app.models.user import UserFieldMapping, merge_preferences
@@ -17,6 +19,7 @@ from app.schemas.user import (
     ATSCredentialsUpdate,
     DeleteAccountRequest,
     FieldMappingsUpdate,
+    InternshalaSessionIn,
     LinkedInCookieIn,
     PreferencesUpdate,
     ProfileUpdate,
@@ -28,6 +31,7 @@ from app.services.presets import apply_preset
 from app.services.privacy import delete_user_data, export_user_data
 from app.services.progress import send_now as send_progress_now
 from app.services.question_answerer import STANDARD_FIELDS
+from app.submitters import internshala_apply
 from app.worker.dispatch import enqueue
 
 router = APIRouter(prefix="/users/me", tags=["users"])
@@ -72,6 +76,15 @@ def _validate_focus(prefs: dict) -> None:  # type: ignore[type-arg]
         raise HTTPException(422, "progress_digest must be 'daily', 'weekly' or 'off'")
 
 
+def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
+    for key in ("internshala_bot_enabled", "internshala_auto_submit"):
+        if not isinstance(prefs.get(key), bool):
+            raise HTTPException(422, f"{key} must be true or false")
+    limit = prefs.get("internshala_daily_limit")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 25:
+        raise HTTPException(422, "internshala_daily_limit must be 1-25")
+
+
 @router.put("/preferences")
 def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     unknown = set(body.preferences) - ALLOWED_PREF_KEYS
@@ -95,6 +108,11 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
     if per_source is not None and (not isinstance(per_source, int) or not 10 <= per_source <= 1000):
         raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
     _validate_focus(prefs)
+    _validate_internshala(prefs)
+    if prefs["internshala_bot_enabled"] and not user.prefs.get("internshala_bot_enabled"):
+        consents = dict(user.consents or {})
+        consents["internshala_bot"] = datetime.now(UTC).isoformat()  # you turned it on after the terms warning
+        user.consents = consents
     user.preferences = prefs
     return prefs
 
@@ -194,6 +212,14 @@ def integrations(user: CurrentUser) -> dict:
             "profile_diff": (user.linkedin_profile_snapshot or {}).get("diff"),
             "synced_at": (user.linkedin_profile_snapshot or {}).get("synced_at"),
         },
+        "internshala": {  # never the cookies themselves
+            "connected": bool(user.internshala_session),
+            "session_valid": bool(user.internshala_session_valid),
+            "updated_at": user.internshala_session_updated_at.isoformat() if user.internshala_session_updated_at else None,
+            "bot_enabled": bool(user.prefs.get("internshala_bot_enabled")),
+            "auto_submit": bool(user.prefs.get("internshala_auto_submit")),
+            "daily_limit": int(user.prefs.get("internshala_daily_limit") or 15),
+        },
         "llm": {"providers": llm.provider_names, "model": settings.ANTHROPIC_MODEL if settings.ANTHROPIC_API_KEY else None,
                 "embedding_provider": settings.EMBEDDING_PROVIDER},
         "automation": {"proxies": len(proxy_manager.urls), "captcha": bool(settings.CAPTCHA_API_KEY),
@@ -231,6 +257,69 @@ def trigger_linkedin_sync(user: CurrentUser, db: DB) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "LinkedIn session not synced yet")
     enqueue("linkedin_sync_user", str(user.id), after_commit=db)
     return {"queued": True}
+
+
+INTERNSHALA_DOMAIN = re.compile(r"\.?(?:[a-z0-9-]+\.)*internshala\.com")
+COOKIE_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+MAX_INTERNSHALA_SESSION_CHARS = 32_000
+
+
+@router.post("/integrations/internshala-session")
+def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser) -> dict:
+    """The extension sends your internshala.com cookies (httpOnly ones included); stored encrypted."""
+    now = datetime.now(UTC)
+    cookies: dict[tuple[str, str, str], dict] = {}  # type: ignore[type-arg]
+    for c in body.cookies:
+        domain = c.domain.strip().lower()
+        if not INTERNSHALA_DOMAIN.fullmatch(domain):
+            raise HTTPException(422, f"Only internshala.com cookies are accepted, not {domain[:60]}")
+        if not COOKIE_NAME.fullmatch(c.name) or any(ord(ch) < 32 or ch in ";\x7f" for ch in c.value):
+            raise HTTPException(422, f"Invalid cookie {c.name[:40]}")
+        if c.expiration_date is not None and c.expiration_date < now.timestamp():
+            continue  # already expired
+        path = c.path or "/"
+        cookies[(c.name, domain, path)] = {
+            "name": c.name, "value": c.value, "domain": domain, "path": path, "secure": c.secure, "httpOnly": c.http_only,
+            "sameSite": c.same_site, "expirationDate": c.expiration_date,
+            "hostOnly": c.host_only if c.host_only is not None else not domain.startswith("."),
+        }
+    stored = list(cookies.values())
+    if sum(len(c["name"]) + len(c["value"]) for c in stored) > MAX_INTERNSHALA_SESSION_CHARS:
+        raise HTTPException(413, "Too many Internshala cookies")
+    if not any(c["name"] in internshala_apply.SESSION_COOKIES and c["value"] for c in stored):
+        raise HTTPException(422, "No Internshala session cookie found — log into Internshala in Chrome and sync again")
+    if not internshala_apply.has_login(stored):
+        raise HTTPException(422, "You're not logged into Internshala in this browser — log in and sync again")
+    user.internshala_session = stored
+    user.internshala_session_updated_at = now
+    user.internshala_session_valid = True
+    consents = dict(user.consents or {})
+    consents["internshala"] = now.isoformat()
+    user.consents = consents
+    return {"ok": True, "synced_at": now.isoformat(), "cookies": len(stored)}
+
+
+@router.delete("/integrations/internshala")
+def disconnect_internshala(user: CurrentUser) -> dict:
+    user.internshala_session = None
+    user.internshala_session_updated_at = None
+    user.internshala_session_valid = False
+    return {"ok": True}
+
+
+@router.post("/integrations/internshala/check")
+def check_internshala_session(user: CurrentUser) -> dict:
+    """Open Internshala with your synced login in a real browser and see whether it's still signed in."""
+    if not user.internshala_session:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Internshala login not synced yet — use the browser extension")
+    try:
+        valid = internshala_apply.check_session(user.internshala_session)
+    except BrowserUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"No browser available to check the session: {exc}") from exc
+    except Exception as exc:  # a timeout or network error: report it, keep the stored state
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not reach Internshala: {exc}") from exc
+    user.internshala_session_valid = valid
+    return {"session_valid": valid, "checked_at": datetime.now(UTC).isoformat()}
 
 
 # ------------------------------------------------------------------ privacy

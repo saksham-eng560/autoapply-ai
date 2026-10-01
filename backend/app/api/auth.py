@@ -100,7 +100,7 @@ def ws_token(user: CurrentUser) -> dict:
 
 @router.post("/extension-token")
 def extension_token(user: CurrentUser) -> dict:
-    """Long-lived, limited-scope token for the Chrome extension (LinkedIn session sync)."""
+    """Long-lived, limited-scope token for the Chrome extension (LinkedIn and Internshala session sync)."""
     token = create_token(str(user.id), scope="extension", expires_delta=timedelta(days=settings.EXTENSION_TOKEN_EXPIRE_DAYS))
     return {"token": token, "expires_in_days": settings.EXTENSION_TOKEN_EXPIRE_DAYS, "api_url": settings.PUBLIC_API_URL}
 

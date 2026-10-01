@@ -5,7 +5,9 @@ your target roles and location focus (e.g. ``/internships/software-development-i
 and you can add any Internshala search URL you like under ``sources.internshala_urls``.
 
 Applying on Internshala needs your own Internshala login, so these jobs are marked "apply on
-Internshala": the agent prepares your resume and answers, you apply there and click "I Applied".
+Internshala": the agent prepares your resume and answers, you apply there and click "I Applied". With the
+opt-in Internshala bot (Settings › Integrations, login synced by the browser extension) the agent fills the
+application itself and sends it when you click Submit (``app/submitters/internshala_apply.py``).
 
 Internshala changes its markup from time to time; the parser tries the current and older class names.
 Check it with ``python scripts/test_scraper.py internshala``.

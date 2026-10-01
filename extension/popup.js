@@ -1,20 +1,28 @@
 const $ = (id) => document.getElementById(id);
 
-function setMessage(text, ok) {
-  const el = $("message");
+function setMessage(text, ok, id = "message") {
+  const el = $(id);
   el.textContent = text || "";
   el.className = ok ? "ok" : "err";
   el.style.marginTop = text ? "6px" : "0";
+}
+
+function showLogin(id, loggedIn) {
+  $(id).textContent = loggedIn ? "✓ logged in" : "not logged in";
+  $(id).className = loggedIn ? "ok" : "err";
 }
 
 async function refresh() {
   const status = await chrome.runtime.sendMessage({ type: "status" });
   if (status.dashboardUrl) $("dashboardUrl").value = status.dashboardUrl;
   $("token").placeholder = status.token ? "•••••••• (saved — paste to replace)" : $("token").placeholder;
-  $("login").textContent = status.loggedIn ? "✓ logged in" : "not logged in";
-  $("login").className = status.loggedIn ? "ok" : "err";
+  showLogin("login", status.loggedIn);
   $("lastSync").textContent = status.lastSync ? new Date(status.lastSync).toLocaleString() : "never";
   if (status.lastError) setMessage(status.lastError, false);
+  const internshala = status.internshala || {};
+  showLogin("internshalaLogin", internshala.loggedIn);
+  $("internshalaLastSync").textContent = internshala.lastSync ? new Date(internshala.lastSync).toLocaleString() : "never";
+  if (internshala.lastError) setMessage(internshala.lastError, false, "internshalaMessage");
 }
 
 $("config").addEventListener("submit", async (event) => {
@@ -49,6 +57,17 @@ $("sync").addEventListener("click", async () => {
   $("sync").disabled = false;
   $("sync").textContent = "Sync LinkedIn session";
   setMessage(result.ok ? "Synced! Easy Apply is ready in your dashboard." : result.error, result.ok);
+  refresh();
+});
+
+$("syncInternshala").addEventListener("click", async () => {
+  $("syncInternshala").disabled = true;
+  $("syncInternshala").textContent = "Syncing…";
+  const result = await chrome.runtime.sendMessage({ type: "sync-internshala" });
+  $("syncInternshala").disabled = false;
+  $("syncInternshala").textContent = "Sync Internshala session";
+  setMessage(result.ok ? "Synced! Turn on the Internshala bot in Settings → Integrations." : result.error, result.ok,
+    "internshalaMessage");
   refresh();
 });
 

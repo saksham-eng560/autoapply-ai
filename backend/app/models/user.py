@@ -62,6 +62,10 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "auto_keep_min_score": None,    # optionally keep jobs scoring at least this without swiping
     "max_jobs_per_source": None,    # None = server default (MAX_JOBS_PER_SOURCE)
     "exclude_no_sponsorship": False,  # skip listings that say they don't sponsor visas
+    # --- Internshala apply bot (opt-in; Internshala's terms don't allow automated access) ---
+    "internshala_bot_enabled": False,  # fill Internshala applications with your synced Internshala login
+    "internshala_auto_submit": False,  # send them without your click (otherwise they wait for you)
+    "internshala_daily_limit": 15,     # at most this many Internshala applications a day (1-25)
     "sources": {
         # ATS boards to crawl directly (public APIs, no login needed)
         "greenhouse_boards": [],   # e.g. ["stripe", "airbnb"]
