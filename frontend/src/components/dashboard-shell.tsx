@@ -37,7 +37,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/dashboard/review", label: "Swipe Review", icon: Layers, badge: "review" },
       { href: "/dashboard/submit", label: "Ready to submit", icon: ListChecks, badge: "pending" },
-      { href: "/dashboard/applications", label: "Applications", icon: Send, badge: "pending" },
+      { href: "/dashboard/applications", label: "Applications", icon: Send },
       { href: "/dashboard/applied", label: "I Applied", icon: CheckCheck },
       { href: "/dashboard/jobs", label: "All jobs", icon: Briefcase },
     ],

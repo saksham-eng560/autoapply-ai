@@ -175,3 +175,16 @@ def test_resume_facts_answer_education_and_location_questions() -> None:
     yes_no = answer_questions([{"question": "Do you have a degree in Computer Science?", "options": ["Yes", "No"]}],
                               RESUME, {}, {}, use_llm=False)[0]
     assert yes_no["answer"] in ("Yes", "No")
+
+
+def test_ambiguous_dates_follow_the_box_format() -> None:
+    today = date(2026, 10, 1)
+    assert parse_when("01/02/2004", today) == date(2004, 2, 1)  # day first by default (India, UK, most forms)
+    assert parse_when("01/02/2004", today, day_first=False) == date(2004, 1, 2)
+    assert parse_when("06/15/2027", today) == date(2027, 6, 15)  # can only be month first
+    box = lambda placeholder: FormField(handle="aa-0", tag="input", type="text", label="Date of birth",  # noqa: E731
+                                        placeholder=placeholder)
+    assert coerce_value(box("DD/MM/YYYY"), "01/02/2004") == "01/02/2004"  # already in the box's format: typed as is
+    assert coerce_value(box("DD/MM/YYYY"), "2004-02-01") == "01/02/2004"
+    assert coerce_value(box("MM/DD/YYYY"), "2004-02-01") == "02/01/2004"
+    assert coerce_value(box("YYYY-MM-DD"), "01/02/2004") == "2004-02-01"
