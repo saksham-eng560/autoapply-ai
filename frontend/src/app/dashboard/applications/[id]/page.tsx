@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, Building2, CheckCircle2, Download, ExternalLink, FileText, MapPin, RefreshCw, Save,
+  AlertTriangle, ArrowLeft, Building2, CheckCircle2, Download, ExternalLink, FileText, ListChecks, MapPin, RefreshCw, Save,
   ShieldCheck, Sparkles, XCircle,
 } from "lucide-react";
 import { ApprovalModal } from "@/components/approval-modal";
@@ -125,7 +125,12 @@ export default function ApplicationDetailPage() {
               <Button variant="outline" onClick={() => run("skip", () => post(`/applications/${app.id}/skip`), "Skipped")} loading={busy === "skip"}>
                 <XCircle /> Skip
               </Button>
-              <Button onClick={() => setApproveOpen(true)}><ShieldCheck /> Review & approve</Button>
+              {app.status === "pending_approval" && (
+                <Link href={`/dashboard/submit?id=${app.id}`} className={buttonVariants()}><ListChecks /> Review & submit</Link>
+              )}
+              <Button variant={app.status === "pending_approval" ? "outline" : "default"} onClick={() => setApproveOpen(true)}>
+                <ShieldCheck /> Review & approve
+              </Button>
             </>
           )}
           {!reviewable && !["approved", "preparing"].includes(app.status) && (

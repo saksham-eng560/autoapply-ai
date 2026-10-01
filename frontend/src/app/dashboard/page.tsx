@@ -3,7 +3,7 @@
 import Link from "next/link";
 import useSWR from "swr";
 import {
-  ArrowRight, ArrowUpRight, CalendarDays, CheckCircle2, Circle, Hand, Layers, Play, Radar, Send, Trophy,
+  ArrowRight, ArrowUpRight, CalendarDays, CheckCircle2, Circle, Hand, Layers, ListChecks, Play, Radar, Send, Trophy,
 } from "lucide-react";
 import { ApplicationCard } from "@/components/application-card";
 import { StatTile, TimelineChart } from "@/components/analytics-charts";
@@ -137,21 +137,35 @@ export default function OverviewPage() {
 
       <div className="mt-8 grid grid-cols-1 gap-8 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
             <div>
               <CardTitle>Needs your approval</CardTitle>
               <CardDescription className="mt-2">Filled out and paused — the agent needs an answer only you can give.</CardDescription>
             </div>
-            <Link href="/dashboard/applications?status=pending_approval" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-              View all <ArrowRight />
-            </Link>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              {!!pending?.items.length && (
+                <Link href={`/dashboard/submit?id=${pending.items[0].id}`} className={buttonVariants({ size: "sm" })}>
+                  <ListChecks /> Review & submit
+                </Link>
+              )}
+              <Link href="/dashboard/applications?status=pending_approval" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+                View all <ArrowRight />
+              </Link>
+            </div>
           </CardHeader>
           <CardContent className="space-y-2">
             {!pending?.items.length ? (
               <EmptyState icon={Hand} title="Nothing waiting for review"
                 description={status?.preparing ? `${status.preparing} kept job(s) are being tailored and filled right now.` : "Keep jobs in Swipe Review — anything the agent can't answer on its own shows up here."} />
             ) : (
-              pending.items.map((app) => <ApplicationCard key={app.id} app={app} />)
+              pending.items.map((app) => (
+                <ApplicationCard key={app.id} app={app} action={
+                  <Link href={`/dashboard/submit?id=${app.id}`} aria-label={`Review & submit: ${app.job?.role_title ?? "application"}`}
+                    className={cn(buttonVariants({ variant: "outline", size: "sm" }), "px-2 sm:px-3")}>
+                    <ListChecks /> <span className="hidden sm:inline">Review & submit</span>
+                  </Link>
+                } />
+              ))
             )}
           </CardContent>
         </Card>

@@ -10,6 +10,7 @@ import type {
   NotificationItem,
   Overview,
   Paginated,
+  SubmitQueue,
   User,
 } from "@/lib/types";
 
@@ -42,6 +43,12 @@ export function useApplications(params: Record<string, string | number | boolean
 
 export function useApplication(id: string | undefined) {
   return useSWR<ApplicationDetail>(id ? `/applications/${id}` : null, fetcher, LIVE);
+}
+
+/** "Ready to submit": filled-in applications paused for you, each as a review sheet. No refetch on focus:
+ *  coming back from the posting in another tab must not shuffle the sheet you're halfway through. */
+export function useSubmitQueue() {
+  return useSWR<SubmitQueue>("/applications/review-queue?limit=100", fetcher, { refreshInterval: 30000, revalidateOnFocus: false });
 }
 
 export function useNotifications() {

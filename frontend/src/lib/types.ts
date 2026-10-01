@@ -236,6 +236,8 @@ export interface ApplicationDetail extends ApplicationSummary {
   similarity_score: number | null;
   cover_letter: string | null;
   custom_answers: CustomAnswer[];
+  /** Your corrections from "Ready to submit": profile key ("email") or "label:<form label>" -> value. */
+  field_overrides?: Record<string, string>;
   form_fields: FormFieldReport[];
   tailored_resume: Resume | null;
   tailored_resume_pdf_url: string | null;
@@ -252,6 +254,51 @@ export interface ApplicationDetail extends ApplicationSummary {
   history: HistoryEntry[];
   communications: Communication[];
   interviews: Interview[];
+}
+
+/** One prefilled item on the "Ready to submit" sheet. */
+export interface ReviewRow {
+  /** Profile key ("email"), "label:<form label>" for questions, "cover_letter", "resume" or "file:<label>". */
+  key: string;
+  label: string;
+  kind: "profile" | "question" | "cover_letter" | "resume" | "file";
+  value: string;
+  /** The form control: text, textarea, select, radio, checkbox, email, tel, number, file... */
+  type: string;
+  options: string[];
+  required: boolean;
+  /** The agent filled this in on the staged form. */
+  filled: boolean;
+  /** Low confidence, flagged for review, or a required field the agent couldn't fill. */
+  flagged: boolean;
+  source: string;
+  confidence: number | null;
+  /** Why it's flagged, in plain words. */
+  note: string | null;
+  /** The resume PDF, for the resume row. */
+  url: string | null;
+}
+
+export interface SubmitQueueItem extends ApplicationSummary {
+  form_screenshot_url: string | null;
+  tailored_resume_pdf_url: string | null;
+  staged_at: string | null;
+  /** Why the agent can't submit this one itself (e.g. an Internshala login): apply there, then "I Applied". */
+  blocker: string | null;
+  apply_url: string | null;
+  /** Rows needing your attention first, then the rest in form order. */
+  rows: ReviewRow[];
+  attention: number;
+}
+
+export interface SubmitQueue {
+  items: SubmitQueueItem[];
+  total: number;
+}
+
+export interface DirectSubmitResponse extends ApplicationDetail {
+  /** The next application waiting in the queue, or null when it was the last one. */
+  next_id: string | null;
 }
 
 export interface AgentRun {
