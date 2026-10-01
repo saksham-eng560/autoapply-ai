@@ -868,6 +868,7 @@ approved**.
 
 | Symptom | Fix |
 |---|---|
+| "Invalid email or password" on a Mac / local setup | Each copy of the project folder has its own database (`backend/data/autoapply.db`), so the account may be in another copy. Run `backend/.venv/bin/python scripts/account.py where you@example.com` to see which database the app uses, which accounts it holds and where else your account is. Forgot the password? `backend/.venv/bin/python scripts/account.py reset-password you@example.com` (typed at a hidden prompt). `./start.sh` also prints how many accounts its database holds. |
 | Dashboard shows "degraded" at `/api/health` | The API isn't reachable from the dashboard. Check `docker compose logs api` and that `BACKEND_URL` points to it. |
 | Nothing gets prepared after a scan | In swipe mode nothing is prepared until you keep it: open **Swipe Review**. Upload a master resume first. **All jobs** shows each job's score and why it was skipped, and **Agent Logs** shows each run step by step. |
 | Kept jobs stop in "Needs approval" | A question needs you (usually visa sponsorship or work authorization). Save the answer in **Settings › Saved answers** once and future forms are filled automatically. |

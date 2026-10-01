@@ -384,6 +384,18 @@ fi
 say "Preparing the database…"
 "$PY" scripts/migrate.py >"$LOG_DIR/migrate.log" 2>&1 || { cat "$LOG_DIR/migrate.log"; die "Database migration failed"; }
 ok "Database ready ($( [ "${DATABASE_URL#sqlite}" != "$DATABASE_URL" ] && echo "SQLite: backend/data/autoapply.db" || echo "$DATABASE_URL"))"
+if [ "${DATABASE_URL#sqlite}" != "$DATABASE_URL" ]; then
+  # Each copy of the project has its own database: say whose accounts this one holds.
+  ACCOUNTS="$("$PY" -c 'import sqlite3,sys
+try: print(sqlite3.connect(sys.argv[1]).execute("select count(*) from users").fetchone()[0])
+except Exception: print(0)' "$ROOT/backend/data/autoapply.db" 2>/dev/null || echo 0)"
+  if [ "${ACCOUNTS:-0}" = 0 ]; then
+    warn "No accounts in this copy's database yet. Sign up at /register, or if you had one, find it with:"
+    warn "  $PY scripts/account.py where"
+  else
+    ok "$ACCOUNTS account(s) in this database (forgot the password? $PY scripts/account.py reset-password <email>)"
+  fi
+fi
 
 if [ "$DEMO" = 1 ]; then
   "$PY" scripts/seed_db.py >"$LOG_DIR/seed.log" 2>&1 && ok "Demo account: demo@example.com / demo-password-123" || warn "Seeding skipped (see logs/seed.log)"
