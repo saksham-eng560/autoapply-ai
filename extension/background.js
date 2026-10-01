@@ -104,14 +104,15 @@ async function syncInternshala(reason = "manual") {
     const response = await fetch(`${config.dashboardUrl}/api/v1/users/me/integrations/internshala-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
-      body: JSON.stringify({ cookies }),
+      body: JSON.stringify({ cookies, reason }),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       const error = response.status === 401
         ? "Token rejected — generate a new extension token in Settings → Integrations."
         : `Sync failed (${response.status}) ${body.detail || ""}`.trim();
-      await chrome.storage.local.set({ lastInternshalaError: error });
+      // 409: you disconnected Internshala in the dashboard. Stop syncing it until you click Sync again.
+      await chrome.storage.local.set({ lastInternshalaError: error, ...(response.status === 409 ? { internshalaEnabled: false } : {}) });
       return { ok: false, error };
     }
     const lastInternshalaSync = new Date().toISOString();

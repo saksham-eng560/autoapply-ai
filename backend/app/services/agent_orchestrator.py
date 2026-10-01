@@ -34,7 +34,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -856,7 +856,8 @@ def internshala_submitted_today(db: Session, user: User) -> int:
         select(func.count()).select_from(History)
         .join(Application, Application.id == History.application_id).join(Job, Job.id == Application.job_id)
         .where(Application.user_id == user.id, History.new_status == ApplicationStatus.APPLIED,
-               History.changed_by == "agent", History.created_at >= start, Job.source_url.like("%internshala.com/%"))
+               History.changed_by == "agent", History.created_at >= start,
+               or_(Job.source_url.like("%internshala.com/%"), Job.application_url.like("%internshala.com/%")))
     ) or 0)
 
 
@@ -895,11 +896,39 @@ def direct_submit_blocker(user: User, app: Application) -> str | None:
     can, once you turn on its bot and sync your login.
     """
     if is_internshala_job(app.job):
-        return None if internshala_ready(user) else INTERNSHALA_BLOCKER
+        if not internshala_ready(user):
+            return INTERNSHALA_BLOCKER
+        if not app.form_fields:  # prepared while the bot was off: the real form hasn't been read yet
+            return INTERNSHALA_FILLING
+        return None
     site = (app.job.raw_data or {}).get("apply_on_site")
     if site:
         return f"{site} needs your own {site} login: apply there, then click “I Applied”."
     return None
+
+
+INTERNSHALA_FILLING = ("The Internshala bot is filling in this form now — check back in a minute or two, "
+                      "then review every answer before you submit.")
+
+
+def restage_internshala_waiting(db: Session, user: User) -> int:
+    """Internshala applications prepared while the bot was off get their real form filled once it's on,
+    so you review what will actually be sent (never submit a form nobody has seen)."""
+    from app.worker.dispatch import enqueue
+
+    if not internshala_ready(user):
+        return 0
+    waiting = db.scalars(select(Application).where(Application.user_id == user.id,
+                                                   Application.status == ApplicationStatus.PENDING_APPROVAL)).all()
+    count = 0
+    for app in waiting:
+        if is_internshala_job(app.job) and not app.form_fields:
+            app.needs_manual_review = False
+            app.manual_review_reason = None
+            set_status(db, app, ApplicationStatus.PREPARING, "agent", "Filling the Internshala form with the bot")
+            enqueue("stage_application", str(app.id), after_commit=db)
+            count += 1
+    return count
 
 
 def _mark_ready(db: Session, user: User, app: Application) -> None:
@@ -1016,10 +1045,13 @@ def stage_application(db: Session, application_id: str, run: RunLog | None = Non
     """Fill the form and take a screenshot WITHOUT submitting, then wait for approval."""
     app = db.get(Application, uuid.UUID(str(application_id)))
     user = db.get(User, app.user_id)
-    site = (app.job.raw_data or {}).get("apply_on_site")
+    internshala = is_internshala_job(app.job)
+    site = (app.job.raw_data or {}).get("apply_on_site") or ("Internshala" if internshala else None)
     # Boards like Internshala only take applications from your own logged-in account (the opt-in
     # Internshala bot can, with the login the extension syncs: then the form is filled like any other).
-    if site and not (is_internshala_job(app.job) and internshala_ready(user)):
+    # Any Internshala posting counts, however it was added (e.g. "Add job by URL"), so the bot never
+    # opens your account while it's off.
+    if site and not (internshala and internshala_ready(user)):
         app.auto_submit = False
         app.needs_manual_review = True
         app.manual_review_reason = (f"{site} needs your own {site} login: open the application form, apply there, "

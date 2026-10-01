@@ -26,7 +26,7 @@ import type { DirectSubmitResponse, ReviewRow, SubmitQueueItem } from "@/lib/typ
 import { PLATFORM_LABELS, cn, timeAgo, titleCase } from "@/lib/utils";
 
 type RowStatus = "pending" | "editing" | "confirmed";
-type RowState = { value: string; status: RowStatus; edited: boolean; error?: string };
+type RowState = { value: string; status: RowStatus; edited: boolean; error?: string; before?: RowStatus };
 type Sheet = Record<string, RowState>;
 type Exit = "submit" | "skip";
 
@@ -67,7 +67,10 @@ function RowEditor({ row, state, onSave, onCancel }: {
   const id = `fix-${row.key}`;
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); onCancel(); }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || e.currentTarget.tagName === "INPUT")) { e.preventDefault(); onSave(draft); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || ["INPUT", "SELECT"].includes(e.currentTarget.tagName))) {
+      e.preventDefault();
+      onSave(draft);
+    }
   };
   return (
     <div className="mt-3 space-y-3">
@@ -81,6 +84,7 @@ function RowEditor({ row, state, onSave, onCancel }: {
           className={cn(row.kind === "cover_letter" ? "min-h-[320px] font-serif text-[15px]" : "min-h-[120px]")} />
       ) : (
         <Input id={id} aria-label={row.label} value={draft} autoFocus onChange={(e) => setDraft(e.target.value)} onKeyDown={keys}
+          type={row.type === "date" && (!draft || /^\d{4}-\d{2}-\d{2}$/.test(draft)) ? "date" : "text"}
           inputMode={row.type === "email" ? "email" : row.type === "tel" ? "tel" : row.type === "number" ? "numeric" : undefined} />
       )}
       {state.error && <p className="text-xs text-primary" role="alert">{state.error}</p>}
@@ -258,7 +262,9 @@ function SubmitInner() {
   useEffect(() => {
     if (!data || !askedFor.current) return;
     if (!data.items.some((i) => i.id === askedFor.current)) {
-      toast({ title: "That application isn't waiting for you anymore", description: "Showing the next one in the queue.", tone: "info" });
+      toast({ title: "That application isn't waiting for you anymore",
+        description: data.items.length ? "Showing the next one in the queue." : undefined, tone: "info" });
+      if (!data.items.length) window.history.replaceState(null, "", window.location.pathname);
     }
     askedFor.current = null;
   }, [data, toast]);
@@ -301,8 +307,8 @@ function SubmitInner() {
   }, [rows, stateOf]);
 
   const fix = useCallback((row: ReviewRow) => {
-    if (editable(row)) update(row, { status: "editing", error: undefined });
-  }, [update]);
+    if (editable(row)) update(row, { status: "editing", before: stateOf(row).status === "confirmed" ? "confirmed" : "pending", error: undefined });
+  }, [update, stateOf]);
 
   const confirm = useCallback((row: ReviewRow, i: number) => {
     const state = stateOf(row);
@@ -469,7 +475,8 @@ function SubmitInner() {
               <header className="flex flex-col gap-4 border-b border-line/60 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
                 <div className="min-w-0 flex-1">
                   <p className="label-caps text-[10px] text-muted-foreground">
-                    via {PLATFORM_LABELS[item.ats_platform || ""] || titleCase(item.ats_platform) || "the company site"}
+                    via {/internshala\.com/.test(item.apply_url || "") ? "Internshala"
+                      : PLATFORM_LABELS[item.ats_platform || ""] || titleCase(item.ats_platform) || "the company site"}
                     {item.staged_at ? ` · filled ${timeAgo(item.staged_at)}` : ""}
                   </p>
                   <h2 className="display mt-3 break-words text-2xl sm:text-[1.9rem]">{job?.role_title}</h2>
@@ -524,7 +531,7 @@ function SubmitInner() {
                       onConfirm={() => confirm(row, i)}
                       onFix={() => { setFocus(i); fix(row); }}
                       onSave={(value) => save(row, i, value)}
-                      onCancel={() => { update(row, { status: "pending", error: undefined }); focusRow(i); }}
+                      onCancel={() => { update(row, { status: stateOf(row).before ?? "pending", error: undefined }); focusRow(i); }}
                       onUndo={() => update(row, { status: "pending" })} />
                   ))}
                 </ol>

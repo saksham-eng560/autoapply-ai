@@ -32,6 +32,7 @@ STANDARD_FIELDS: dict[str, dict[str, Any]] = {
     "willing_to_relocate": {"label": "Willing to relocate?", "type": "radio", "options": ["Yes", "No"]},
     "years_experience": {"label": "Total years of professional experience", "type": "number"},
     "salary_expectation": {"label": "Salary expectation (leave empty to use your preferences)", "type": "text"},
+    "expected_stipend": {"label": "Expected internship stipend per month, e.g. 15000 (INR)", "type": "number"},
     "notice_period": {"label": "Notice period / earliest start date", "type": "text"},
     "highest_education": {"label": "Highest level of education", "type": "select",
                           "options": ["High School", "Associate's", "Bachelor's", "Master's", "PhD"]},
@@ -147,17 +148,28 @@ class _Ctx:
         self.prefs = prefs
         self.mappings = mappings
         self.job = job
+        self.question = ""  # the (normalized) question being answered
 
     def m(self, key: str) -> str | None:
         value = self.mappings.get(key)
         return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+_CURRENCIES = {"INR": r"\binr\b|₹|\brs\.?\s|rupee|\blpa\b|lakh", "USD": r"\busd\b|\$|dollar",
+               "EUR": r"\beur\b|€|\beuro", "GBP": r"\bgbp\b|£|pound sterling"}
+_MONTHLY = re.compile(r"per month|monthly|/\s*month|\bstipend\b")
+
+
 def _salary(ctx: _Ctx) -> tuple[str | None, float]:
+    if _MONTHLY.search(ctx.question):  # an internship stipend is monthly; your salary range is yearly
+        return (ctx.m("expected_stipend"), 0.95) if ctx.m("expected_stipend") else (None, 0.0)
     if ctx.m("salary_expectation"):
         return ctx.m("salary_expectation"), 0.95
     low = ctx.prefs.get("salary_min")
     if low:
+        asked = next((cur for cur, pattern in _CURRENCIES.items() if re.search(pattern, ctx.question)), None)
+        if asked and asked != (ctx.prefs.get("salary_currency") or "USD"):
+            return None, 0.0  # never answer a ₹ question with a $ figure
         return str(int(low)), 0.85  # behavioral rule #9: bottom of the range
     return None, 0.0
 
@@ -300,6 +312,7 @@ def rule_based_answer(question: dict[str, Any], ctx: _Ctx) -> dict[str, Any] | N
     options = question.get("options") or []
     field_type = question.get("field_type") or ("select" if options else "text")
     direct = _field_mapping_lookup(text, ctx.mappings)
+    ctx.question = text
     if direct:
         answer, confidence = direct, 0.97
     else:

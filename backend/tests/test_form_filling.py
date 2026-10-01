@@ -98,12 +98,12 @@ def site() -> Iterator[_Site]:
 @pytest.mark.e2e
 @pytest.mark.skipif(not _chromium_available(), reason="Chromium not available")
 def test_indian_internship_form_is_filled_correctly(site: _Site) -> None:
-    prefs = {"salary_min": 15000}
+    prefs = {"salary_min": 900000, "salary_currency": "INR"}  # a yearly range never answers a monthly stipend
     packet = CandidatePacket(
         first_name="Aarav", last_name="Sharma", email="aarav@example.com", phone="+91 98100 12345",
         location="New Delhi, Delhi, India", linkedin="https://linkedin.com/in/aarav", github="https://github.com/aarav",
         application_url=site.url, company_name="Acme", role_title="Software Engineering Intern",
-        resolve_answers=lambda qs: answer_questions(qs, RESUME, prefs, {}, use_llm=False),
+        resolve_answers=lambda qs: answer_questions(qs, RESUME, prefs, {"expected_stipend": "15000"}, use_llm=False),
     )
     result = BaseSubmitter().submit(packet)
     assert result.stage == "submitted", (result.error, [f for f in result.fields if f["status"] != "filled"])

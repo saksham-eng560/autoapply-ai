@@ -583,11 +583,13 @@ function AIModelCard({ integ, refresh }: { integ: Integrations; refresh: () => P
           <Fact label="Fallback">{fallbacks || "none"}</Fact>
         </div>
         {!llm.provider && (
-          <p className="flex items-start gap-2 text-muted-foreground">
+          <div className="flex items-start gap-2 text-muted-foreground">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-            No AI model is set up, so every step runs on built-in heuristics (it works, at lower quality). Add a Claude key to
-            <code className="mx-1">.env</code>or run a free model with Ollama, as shown below.
-          </p>
+            <p>
+              No AI model is set up, so every step runs on built-in heuristics (it works, at lower quality). Add a Claude key to{" "}
+              <code>.env</code> or run a free model with Ollama, as shown below.
+            </p>
+          </div>
         )}
 
         {showOllama && (
@@ -845,8 +847,10 @@ function InternshalaCard({ status, onChange }: { status: Integrations["internsha
       limit: me.preferences.internshala_daily_limit ?? 15 });
   }, [me]);
   const save = (next: typeof form) => run(async () => {
+    const limit = Math.min(25, Math.max(1, Math.round(next.limit) || 15)); // 1-25 a day
+    setForm({ ...next, limit });
     await put("/users/me/preferences", { preferences: {
-      internshala_bot_enabled: next.bot, internshala_auto_submit: next.bot && next.auto, internshala_daily_limit: next.limit } });
+      internshala_bot_enabled: next.bot, internshala_auto_submit: next.bot && next.auto, internshala_daily_limit: limit } });
     await Promise.all([mutateMe(), onChange()]);
   }, next.bot ? "Internshala bot settings saved" : "Internshala bot turned off");
   const check = async () => {
@@ -892,7 +896,7 @@ function InternshalaCard({ status, onChange }: { status: Integrations["internsha
         </Row>
         <Row label="Daily limit" hint="At most this many Internshala applications a day (1–25), a minute or more apart. Extra approved ones go out the next day.">
           <Input type="number" min={1} max={25} className="max-w-[8rem]" value={form.limit} disabled={!form.bot}
-            onChange={(e) => setForm({ ...form, limit: Number(e.target.value) })} />
+            onChange={(e) => setForm({ ...form, limit: e.target.value === "" ? 15 : Number(e.target.value) })} />
         </Row>
         <div className="pt-2"><Button onClick={() => save(form)} loading={saving} disabled={!form.bot}><Save /> Save Internshala settings</Button></div>
       </CardContent>

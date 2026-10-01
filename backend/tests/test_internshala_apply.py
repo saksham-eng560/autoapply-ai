@@ -255,7 +255,7 @@ def mock_site() -> Iterator[MockInternshala]:
 
 def packet(url: str, *, session: list[dict] | None = None, mappings: dict[str, str] | None = None,
            cover_letter: str | None = COVER_LETTER, answers: list[dict] | None = None, resolve: bool = True) -> CandidatePacket:
-    maps = {"willing_to_relocate": "Yes", "proficiency in python": "4", **(mappings or {})}
+    maps = {"willing_to_relocate": "Yes", "proficiency in python": "4", "expected_stipend": "10000", **(mappings or {})}
     prefs = {"salary_min": 10000}
     return CandidatePacket(
         first_name="Aarav", last_name="Sharma", email="aarav@example.com", phone="+91 98100 12345",
@@ -312,12 +312,14 @@ def test_review_queue_corrections_are_what_internshala_receives(mock_site: MockI
 
     fixed = packet(f"{mock_site.base}/internship/detail/easy-1")
     fixed.overrides = {override_key("What is your expected stipend per month (in INR)?"): "12000",
-                       override_key("Confirm your availability"): "Available from 1 June 2027"}
+                       override_key("Confirm your availability"): "Available from 1 June 2027",
+                       override_key("I am willing to relocate to Delhi for this internship"): ""}  # blanked: untick
     result = InternshalaSubmitter(session_factory=local_session).submit(fixed)
     assert result.stage == "submitted", result.error
     data = mock_site.submissions[0][1]
     assert data["custom_question_number_3"] == "12000"
     assert data["confirm_availability"] == "other" and data["availability_text"] == "Available from 1 June 2027"
+    assert "location_single" not in data  # a blank correction is sent as blank, not replaced by our answer
 
 
 @pytest.mark.e2e
@@ -508,7 +510,10 @@ def test_internshala_preferences(auth_client: TestClient) -> None:
 # ------------------------------------------------------------------------------------------- orchestrator
 def _setup(email: str = "jane@example.com", *, bot: bool = True, session: bool = True, valid: bool = True,
            auto_submit: bool = False, limit: int = 15, url: str | None = None,
-           status: ApplicationStatus = ApplicationStatus.PREPARING, keep: bool = True) -> str:
+           status: ApplicationStatus = ApplicationStatus.PREPARING, keep: bool = True,
+           raw: dict | None = None, filled: bool | None = None) -> str:
+    if filled is None:  # an approved / sent application was filled by the bot when it was staged
+        filled = status in (ApplicationStatus.APPROVED, ApplicationStatus.APPLIED)
     url = url or f"https://internshala.com/internship/detail/python-{uuid.uuid4().hex[:8]}"
     with SessionLocal() as db:
         user = db.query(User).filter(User.email == email).one()
@@ -520,20 +525,26 @@ def _setup(email: str = "jane@example.com", *, bot: bool = True, session: bool =
         job = Job(company_name="Acme Labs", role_title="Python Development Intern", description="Python FastAPI internship. " * 30,
                   source_url=url, application_url=url, source_platform=ATSPlatform.CUSTOM, job_type=JobType.INTERNSHIP,
                   location="Delhi, India", dedupe_key=f"acme-{uuid.uuid4().hex[:8]}",
-                  raw_data={"listing_source": "internshala", "apply_on_site": "Internshala"})
+                  raw_data={"listing_source": "internshala", "apply_on_site": "Internshala"} if raw is None else raw)
         db.add(job)
         db.flush()
         app = Application(user_id=user.id, job_id=job.id, status=status, auto_submit=keep,
                           review_decision="keep" if keep else None, ats_platform=ATSPlatform.CUSTOM,
-                          cover_letter="I am excited to apply.")
+                          cover_letter="I am excited to apply.",
+                          form_fields=[{"label": "Cover letter", "kind": "cover_letter", "status": "filled"}] if filled else None)
         db.add(app)
         db.commit()
         return str(app.id)
 
 
 def _app(app_id: str) -> Application:
-    db = SessionLocal()
-    return db.get(Application, uuid.UUID(app_id))
+    """A detached copy: the session is closed right away so no connection stays "idle in transaction"
+    (on PostgreSQL that would block the next test's DROP TABLE forever)."""
+    with SessionLocal() as db:
+        app = db.get(Application, uuid.UUID(app_id))
+        _ = app.user, app.job, app.history  # load what the tests read before the session goes
+        db.expunge_all()
+    return app
 
 
 class Recorder:
@@ -552,7 +563,8 @@ class Recorder:
 
 
 def test_blocker_is_none_only_when_the_bot_is_ready(auth_client: TestClient, master_resume: dict) -> None:
-    cases = [({}, None), ({"bot": False}, orch.INTERNSHALA_BLOCKER), ({"session": False}, orch.INTERNSHALA_BLOCKER),
+    cases = [({"filled": True}, None), ({}, orch.INTERNSHALA_FILLING),  # ready, but the real form not read yet
+             ({"bot": False}, orch.INTERNSHALA_BLOCKER), ({"session": False}, orch.INTERNSHALA_BLOCKER),
              ({"valid": False}, orch.INTERNSHALA_BLOCKER)]
     for kw, expected in cases:
         app_id = _setup(**kw)
@@ -585,6 +597,38 @@ def test_staging_uses_the_internshala_submitter_when_ready(auth_client: TestClie
     app = _app(app_id)
     assert app.status == ApplicationStatus.PENDING_APPROVAL  # auto-submit is off: waits for your click
     assert app.form_fields[0]["status"] == "filled" and app.form_screenshot_url and not app.needs_manual_review
+
+
+def test_any_internshala_posting_is_left_alone_while_the_bot_is_off(auth_client: TestClient, master_resume: dict,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even one added by URL without the scraper's markers: the bot never opens your account while it's off."""
+    rec = Recorder(monkeypatch)
+    for session in (True, False):
+        app_id = _setup(bot=False, session=session, raw={})
+        with SessionLocal() as db:
+            orch.stage_application(db, app_id)
+            db.commit()
+        assert rec.calls == []
+        app = _app(app_id)
+        assert app.status == ApplicationStatus.PENDING_APPROVAL and "Internshala" in app.manual_review_reason
+        assert app.user.internshala_session_valid  # no "session expired" for a bot you never turned on
+
+
+def test_turning_the_bot_on_fills_the_forms_prepared_while_it_was_off(auth_client: TestClient, master_resume: dict,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = Recorder(monkeypatch)
+    app_id = _setup(bot=False)
+    with run_inline(), SessionLocal() as db:
+        orch.stage_application(db, app_id)
+        db.commit()
+    assert rec.calls == [] and orch.direct_submit_blocker(_app(app_id).user, _app(app_id)) == orch.INTERNSHALA_BLOCKER
+    with run_inline():  # you turn the bot on: the waiting application's real form is filled for you to review
+        r = auth_client.put("/api/v1/users/me/preferences", json={"preferences": {"internshala_bot_enabled": True}})
+    assert r.status_code == 200, r.text
+    assert [c[0] for c in rec.calls] == ["stage"]
+    app = _app(app_id)
+    assert app.status == ApplicationStatus.PENDING_APPROVAL and app.form_fields and not app.manual_review_reason
+    assert orch.direct_submit_blocker(app.user, app) is None
 
 
 def test_staging_short_circuits_when_the_bot_is_off(auth_client: TestClient, master_resume: dict,
@@ -627,7 +671,8 @@ def test_auto_submit_only_with_the_internshala_pref(auth_client: TestClient, mas
     if auto_submit:
         assert [c[0] for c in rec.calls] == ["stage", "submit"]
         assert app.status == ApplicationStatus.APPLIED and app.confirmation_screenshot_url
-        assert orch.internshala_submitted_today(SessionLocal(), app.user) == 1
+        with SessionLocal() as check:
+            assert orch.internshala_submitted_today(check, app.user) == 1
     else:
         assert [c[0] for c in rec.calls] == ["stage"] and app.status == ApplicationStatus.PENDING_APPROVAL
 
@@ -738,3 +783,22 @@ def test_keep_prepare_review_and_submit_against_the_mock(auth_client: TestClient
     assert data["custom_question_number_3"] == "12000"
     assert data["confirm_availability"] == "yes" and data["location_single"] == "yes" and data["custom_question_range_4"] == "4"
     assert data["cover_letter"]
+
+
+def test_disconnect_sticks_until_you_sync_yourself(auth_client: TestClient) -> None:
+    """Disconnecting in the dashboard turns the bot off, and the extension's background re-syncs
+    (scheduled / cookie-changed) can't quietly reconnect it; a manual Sync can."""
+    c = auth_client
+    headers = _token(c)
+    url = "/api/v1/users/me/integrations/internshala-session"
+    assert c.post(url, json={"cookies": SESSION}, headers=headers).status_code == 200
+    c.put("/api/v1/users/me/preferences", json={"preferences": {"internshala_bot_enabled": True}})
+    assert c.delete("/api/v1/users/me/integrations/internshala").status_code == 200
+    block = c.get("/api/v1/users/me/integrations").json()["internshala"]
+    assert not block["connected"] and not block["bot_enabled"]
+    for reason in ("scheduled", "cookie-changed"):
+        r = c.post(url, json={"cookies": SESSION, "reason": reason}, headers=headers)
+        assert r.status_code == 409 and "disconnected" in r.json()["detail"]
+    assert not c.get("/api/v1/users/me/integrations").json()["internshala"]["connected"]
+    assert c.post(url, json={"cookies": SESSION, "reason": "manual"}, headers=headers).status_code == 200
+    assert c.post(url, json={"cookies": SESSION, "reason": "scheduled"}, headers=headers).status_code == 200

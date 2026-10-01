@@ -69,6 +69,7 @@ class InternshalaCookieIn(BaseModel):
 
 class InternshalaSessionIn(BaseModel):
     cookies: list[InternshalaCookieIn] = Field(min_length=1, max_length=60)
+    reason: str = Field(default="manual", max_length=20)  # manual | scheduled | cookie-changed (extension)
 
 
 class DeleteAccountRequest(BaseModel):

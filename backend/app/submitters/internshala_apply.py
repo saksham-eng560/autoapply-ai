@@ -557,7 +557,14 @@ class InternshalaSubmitter(BaseSubmitter):
         by_handle = {a.get("field_id"): a for a in resolved}
         for f, row in questions:
             ans = by_handle.get(f.handle)
-            value = packet.override_for(f.label) or (ans.get("answer") if ans else None)  # your correction wins
+            override = packet.override_for(f.label)  # your correction wins, even a blank one
+            if override is not None and not override.strip():
+                ok = self._clear_question(page, f, row)
+                entry = self._report(f, "question", "", ok)
+                entry["status"] = "skipped" if not f.required else "unmapped"
+                report.append(entry)
+                continue
+            value = override if override is not None else (ans.get("answer") if ans else None)
             ok = self._fill_question(page, f, row, value) if value not in (None, "") else False
             if not ok and f.value and value in (None, ""):
                 ok, value = True, f.value  # nothing to change: Internshala already has a value here
@@ -622,7 +629,7 @@ class InternshalaSubmitter(BaseSubmitter):
         stored = next((a for a in packet.answers if normalize_text(a.get("question") or "") == normalize_text(f.label)
                        and str(a.get("answer") or "").strip()), None)
         text, source = (str(stored["answer"]), stored.get("source") or "user") if stored else (None, "rule")
-        if packet.override_for(f.label):  # your correction in the review queue wins
+        if (packet.override_for(f.label) or "").strip():  # your correction in the review queue wins
             text, source = packet.override_for(f.label), "user"
         if text is None:
             saved = self.resolve(packet, [{"question": "Notice period / earliest start date", "field_type": "text",
@@ -667,6 +674,18 @@ class InternshalaSubmitter(BaseSubmitter):
             selected = page.evaluate(SET_SELECT_JS, {"handle": f.handle, "choice": choice})  # hidden chosen.js select
             return normalize_text(selected) == normalize_text(choice)
         return fill_field(page, f, text)  # text, textarea, number (digits only)
+
+    def _clear_question(self, page: Any, f: FormField, row: dict[str, Any]) -> bool:
+        """You blanked this answer in the review queue: untick / empty it instead of sending ours."""
+        if f.type in ("radio", "checkbox"):
+            return all(self._set_option(page, f.handle, i, on=False) for i in range(max(1, len(f.options))))
+        if f.type == "select":
+            return True  # a dropdown can't be emptied; leave Internshala's default
+        try:
+            page.locator(f.selector).first.fill("")
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def _set_option(self, page: Any, handle: str, idx: int, on: bool = True) -> bool:
         """Tick option ``idx`` the way a person does: click its label (the inputs are hidden)."""

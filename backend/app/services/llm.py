@@ -24,6 +24,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -97,6 +98,22 @@ def extract_json(text: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise LLMError("Model response JSON was not an object")
     return value
+
+
+def scrub_credentials(text: str) -> str:
+    """Remove ``user:password@`` from any URL inside an error message before it's shown or logged."""
+    return re.sub(r"(//)[^/@\s'\"]+:[^/@\s'\"]*@", r"\1", text)
+
+
+def public_url(url: str) -> str:
+    """Scheme + host (+ port) only: no path, query or credentials (safe to show and log)."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return urlunsplit((parts.scheme, f"{host}:{port}" if port else host, "", "", ""))
 
 
 # --------------------------------------------------------------------------- providers
@@ -465,6 +482,11 @@ class OllamaProvider:
     def base_url(self) -> str:
         return settings.ollama_base_url
 
+    @property
+    def shown_url(self) -> str:
+        """The base URL for messages: never user:password@ or a path."""
+        return public_url(self.base_url)
+
     def _disable(self, feature: str) -> None:
         with self._features_lock:
             self._disabled_features.add(feature)
@@ -527,7 +549,7 @@ class OllamaProvider:
             return OllamaError(f"The Ollama model '{self.model}' isn't downloaded yet — press \"Download model\" in "
                                f"Settings › Integrations or run `ollama pull {self.model}`", status)
         if status == 404:
-            return OllamaError(f"Ollama answered 404 at {self.base_url}/api/chat ({detail or 'not found'}) — check OLLAMA_BASE_URL", status)
+            return OllamaError(f"Ollama answered 404 at {self.shown_url}/api/chat ({detail or 'not found'}) — check OLLAMA_BASE_URL", status)
         if status in (401, 403):
             if settings.ollama_is_cloud:
                 return OllamaError(f"Ollama Cloud rejected the request ({detail}) — put a key from https://ollama.com/settings/keys "
@@ -551,11 +573,11 @@ class OllamaProvider:
                 response = httpx.post(url, json=body, headers=ollama_headers(), timeout=timeout)
             except httpx.ConnectError as exc:
                 if settings.ollama_is_cloud:
-                    raise OllamaError(f"Could not reach Ollama Cloud at {self.base_url} ({exc})", retryable=True) from exc
-                raise OllamaError(f"Ollama isn't running at {self.base_url} — start the Ollama app or `ollama serve` "
+                    raise OllamaError(f"Could not reach Ollama Cloud at {self.shown_url} ({exc})", retryable=True) from exc
+                raise OllamaError(f"Ollama isn't running at {self.shown_url} — start the Ollama app or `ollama serve` "
                                   "(and check OLLAMA_BASE_URL)", retryable=True) from exc
             except httpx.ConnectTimeout as exc:
-                raise OllamaError(f"Could not reach Ollama at {self.base_url} (connection timed out) — check OLLAMA_BASE_URL",
+                raise OllamaError(f"Could not reach Ollama at {self.shown_url} (connection timed out) — check OLLAMA_BASE_URL",
                                   retryable=True) from exc
             except httpx.TimeoutException as exc:
                 raise OllamaError(f"Ollama took longer than {settings.OLLAMA_TIMEOUT_SECONDS:.0f} s to answer — use a smaller "
@@ -577,9 +599,9 @@ class OllamaProvider:
             try:
                 data = response.json()
             except ValueError as exc:
-                raise OllamaError(f"{self.base_url} did not answer like Ollama — check OLLAMA_BASE_URL") from exc
+                raise OllamaError(f"{self.shown_url} did not answer like Ollama — check OLLAMA_BASE_URL") from exc
             if not isinstance(data, dict):
-                raise OllamaError(f"{self.base_url} did not answer like Ollama — check OLLAMA_BASE_URL")
+                raise OllamaError(f"{self.shown_url} did not answer like Ollama — check OLLAMA_BASE_URL")
             return data
         raise OllamaError("Ollama request could not be completed")
 

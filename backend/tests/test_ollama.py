@@ -426,3 +426,19 @@ def test_pull_runs_in_the_background_with_progress(auth_client: TestClient, monk
     monkeypatch.setattr(settings, "OLLAMA_BASE_URL", "https://ollama.com")
     r = auth_client.post("/api/v1/users/me/integrations/ollama/pull")
     assert r.status_code == 400 and "nothing to download" in r.json()["detail"]
+
+
+@respx.mock
+def test_credentials_in_the_ollama_url_are_never_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A base URL like http://user:pass@host must not leak through Test AI, status or download errors."""
+    secret_base = "http://qauser:qapass@127.0.0.1:11999"
+    monkeypatch.setattr(settings, "OLLAMA_BASE_URL", secret_base)
+    respx.post("http://127.0.0.1:11999/api/chat").mock(side_effect=httpx.ConnectError("Connection refused"))
+    respx.get("http://127.0.0.1:11999/api/version").mock(return_value=httpx.Response(404))
+    set_llm(LLMClient())
+    result = ai_setup.connection_test()
+    status = ai_setup.ollama_status()
+    shown = json.dumps([result, status, ai_setup._pull_error(httpx.HTTPStatusError(
+        "Client error '404' for url 'http://qauser:qapass@127.0.0.1:11999/api/pull'", request=None, response=None))])
+    assert not result["ok"] and "127.0.0.1:11999" in result["error"]
+    assert "qapass" not in shown and "qauser" not in shown

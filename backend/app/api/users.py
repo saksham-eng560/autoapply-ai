@@ -24,6 +24,7 @@ from app.schemas.user import (
     PreferencesUpdate,
     ProfileUpdate,
 )
+from app.services import agent_orchestrator as orch
 from app.services.ai_setup import PullError, connection_test, llm_section, pull_progress, start_pull
 from app.services.google_oauth import has_scope
 from app.services.location_focus import get_season
@@ -86,7 +87,7 @@ def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
 
 
 @router.put("/preferences")
-def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
+def update_preferences(body: PreferencesUpdate, user: CurrentUser, db: DB) -> dict:
     unknown = set(body.preferences) - ALLOWED_PREF_KEYS
     if unknown:
         raise HTTPException(422, f"Unknown preference keys: {sorted(unknown)}")
@@ -109,11 +110,14 @@ def update_preferences(body: PreferencesUpdate, user: CurrentUser) -> dict:
         raise HTTPException(422, "max_jobs_per_source must be empty or 10-1000")
     _validate_focus(prefs)
     _validate_internshala(prefs)
-    if prefs["internshala_bot_enabled"] and not user.prefs.get("internshala_bot_enabled"):
+    turned_on = prefs["internshala_bot_enabled"] and not user.prefs.get("internshala_bot_enabled")
+    if turned_on:
         consents = dict(user.consents or {})
         consents["internshala_bot"] = datetime.now(UTC).isoformat()  # you turned it on after the terms warning
         user.consents = consents
     user.preferences = prefs
+    if turned_on:
+        orch.restage_internshala_waiting(db, user)  # fill the real forms of anything prepared while it was off
     return prefs
 
 
@@ -287,9 +291,13 @@ MAX_INTERNSHALA_SESSION_CHARS = 32_000
 
 
 @router.post("/integrations/internshala-session")
-def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser) -> dict:
+def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser, db: DB) -> dict:
     """The extension sends your internshala.com cookies (httpOnly ones included); stored encrypted."""
     now = datetime.now(UTC)
+    if body.reason != "manual" and (user.consents or {}).get("internshala_disconnected"):
+        # You disconnected Internshala in the dashboard: background re-syncs don't undo that.
+        raise HTTPException(status.HTTP_409_CONFLICT, "Internshala was disconnected in your dashboard — click "
+                                                      "“Sync Internshala session” in the extension to connect it again.")
     cookies: dict[tuple[str, str, str], dict] = {}  # type: ignore[type-arg]
     for c in body.cookies:
         domain = c.domain.strip().lower()
@@ -317,20 +325,28 @@ def sync_internshala_session(body: InternshalaSessionIn, user: ExtensionUser) ->
     user.internshala_session_valid = True
     consents = dict(user.consents or {})
     consents["internshala"] = now.isoformat()
+    consents.pop("internshala_disconnected", None)
     user.consents = consents
+    orch.restage_internshala_waiting(db, user)
     return {"ok": True, "synced_at": now.isoformat(), "cookies": len(stored)}
 
 
 @router.delete("/integrations/internshala")
 def disconnect_internshala(user: CurrentUser) -> dict:
+    """Forget the Internshala login and turn the bot off; the extension's automatic re-syncs stop too
+    (until you click Sync in the extension yourself)."""
     user.internshala_session = None
     user.internshala_session_updated_at = None
     user.internshala_session_valid = False
+    user.preferences = {**(user.preferences or {}), "internshala_bot_enabled": False, "internshala_auto_submit": False}
+    consents = dict(user.consents or {})
+    consents["internshala_disconnected"] = datetime.now(UTC).isoformat()
+    user.consents = consents
     return {"ok": True}
 
 
 @router.post("/integrations/internshala/check")
-def check_internshala_session(user: CurrentUser) -> dict:
+def check_internshala_session(user: CurrentUser, db: DB) -> dict:
     """Open Internshala with your synced login in a real browser and see whether it's still signed in."""
     if not user.internshala_session:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Internshala login not synced yet — use the browser extension")
@@ -341,6 +357,8 @@ def check_internshala_session(user: CurrentUser) -> dict:
     except Exception as exc:  # a timeout or network error: report it, keep the stored state
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not reach Internshala: {exc}") from exc
     user.internshala_session_valid = valid
+    if valid:
+        orch.restage_internshala_waiting(db, user)
     return {"session_valid": valid, "checked_at": datetime.now(UTC).isoformat()}
 
 

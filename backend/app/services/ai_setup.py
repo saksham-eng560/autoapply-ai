@@ -18,14 +18,23 @@ import logging
 import threading
 import time
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from app.config import settings
 from app.core.redis import get_redis
 from app.services import llm_schemas
-from app.services.llm import LLMClient, LLMError, active_model, get_llm, ollama_error_text, ollama_headers, render_prompt
+from app.services.llm import (
+    LLMClient,
+    LLMError,
+    active_model,
+    get_llm,
+    ollama_error_text,
+    ollama_headers,
+    public_url,
+    render_prompt,
+    scrub_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +58,6 @@ def normalize_model(name: str) -> str:
     """``llama3.2`` -> ``llama3.2:latest`` (how Ollama lists a model pulled without a tag)."""
     name = name.strip()
     return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
-
-
-def public_url(url: str) -> str:
-    """Scheme + host (+ port) only: no path, query or credentials."""
-    parts = urlsplit(url)
-    host = parts.hostname or ""
-    try:
-        port = parts.port
-    except ValueError:
-        port = None
-    return urlunsplit((parts.scheme, f"{host}:{port}" if port else host, "", "", ""))
 
 
 def ollama_status() -> dict[str, Any]:
@@ -100,7 +98,8 @@ def ollama_status() -> dict[str, Any]:
         out["error"] = f"Ollama isn't running at {shown}"
         return out
     except (httpx.HTTPStatusError, ValueError, AttributeError) as exc:
-        out["error"] = f"{shown} didn't answer like Ollama ({str(exc)[:120]})"
+        why = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
+        out["error"] = f"{shown} didn't answer like Ollama ({why})"  # never str(exc): it repeats the full URL
         return out
     names = sorted({normalize_model(str(m.get("name") or m.get("model"))) for m in listed
                     if isinstance(m, dict) and (m.get("name") or m.get("model"))})
@@ -112,7 +111,8 @@ def ollama_status() -> dict[str, Any]:
         out["model_pulled"] = pulled if (names or not settings.ollama_is_cloud) else None
     if model and not settings.ollama_is_cloud:
         progress = pull_progress(model)
-        if progress["status"] != "idle":
+        # A finished download only matters while the model is still there (it may have been removed since).
+        if progress["status"] != "idle" and not (progress["status"] == "success" and not out["model_pulled"]):
             out["pull"] = progress
     return out
 
@@ -160,7 +160,7 @@ def connection_test() -> dict[str, Any]:
         data, used = llm.complete_json_traced(render_prompt("connection_test"), schema=llm_schemas.CONNECTION_TEST_SCHEMA,
                                               effort="low", max_tokens=256, task="connection_test")
     except LLMError as exc:
-        message = str(exc)
+        message = scrub_credentials(str(exc))
         if len(llm.providers) == 1:  # "All LLM providers failed: ollama: <why>" -> "<why>"
             message = message.removeprefix(f"All LLM providers failed: {llm.primary}: ")
         return {**result, "latency_ms": round((time.monotonic() - started) * 1000), "error": message[:800], "hint": hint_for(message)}
@@ -227,7 +227,7 @@ def _pull_error(exc: Exception) -> str:
         return f"Ollama isn't running at {shown}"
     if isinstance(exc, httpx.TimeoutException):
         return "Ollama stopped sending progress for 10 minutes. Press Download model to try again."
-    return f"Download failed: {exc}"
+    return scrub_credentials(f"Download failed: {exc}")
 
 
 def _pull(model: str) -> None:
