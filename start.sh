@@ -191,7 +191,7 @@ setup_ollama() {  # --ollama: make sure Ollama runs here, the model is downloade
       return 0 ;;
     ""|*://ollama:*|*://host.docker.internal:*) url="$DEFAULT_OLLAMA_URL" ;;  # Docker-only names: use this computer
   esac
-  say "Checking Ollama at $url…"
+  say "Checking Ollama at ${url}…"
   if ! ollama_up "$url"; then
     if [ "$url" != "$DEFAULT_OLLAMA_URL" ] && ollama_up "$DEFAULT_OLLAMA_URL"; then
       url="$DEFAULT_OLLAMA_URL"
