@@ -50,6 +50,7 @@ from app.models.user import User, UserFieldMapping
 from app.schemas.resume_content import ResumeContent
 from app.scrapers import SCRAPERS, ScrapedJob, ScraperError, SearchQuery, detect_ats_platform, fetch_job_from_url
 from app.services.application_service import set_status
+from app.services.company_verifier import SUSPICIOUS, UNVERIFIED, CompanyCheck, check_job, is_trusted, verify_with_llm
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
@@ -61,6 +62,7 @@ from app.services.question_answerer import answer_questions, learnable_key, mapp
 from app.services.rate_limiter import rate_limiter
 from app.services.resume_tailor import light_tailor, tailor_resume
 from app.services.scan_progress import ScanCancelled, ScanProgress
+from app.services.source_mix import cap_internshala
 from app.services.text_utils import dedupe_key, extract_skills
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,8 @@ def upsert_job(db: Session, scraped: ScrapedJob) -> tuple[Job, bool]:
         job.is_active = True
         if scraped.description and len(scraped.description) > len(job.description or ""):
             job.description = scraped.description
+        if job.company_verdict is None:
+            apply_company_check(job)
         return job, False
     key = dedupe_key(scraped.company_name, scraped.role_title, scraped.location)
     duplicate = db.scalar(select(Job).where(Job.dedupe_key == key, Job.is_active.is_(True)))
@@ -153,9 +157,109 @@ def upsert_job(db: Session, scraped: ScrapedJob) -> tuple[Job, bool]:
         posted_date=scraped.posted_date,
         deadline_date=scraped.deadline_date,
     )
+    apply_company_check(job)
     db.add(job)
     db.flush()
     return job, True
+
+
+# --------------------------------------------------------------------------- the company check
+COMPANY_AI_CHECKS_PER_SCAN = 8  # distinct unknown companies the AI looks at per scan (local models are slow)
+
+
+def apply_company_check(job: Job, check: CompanyCheck | None = None) -> None:
+    """Store the company-check agent's verdict on the job (services/company_verifier.py)."""
+    check = check or check_job(job)
+    job.company_verdict = check.verdict
+    job.company_tier = check.tier or (job.raw_data or {}).get("company_tier")
+    job.company_check = check.as_dict()
+
+
+def backfill_company_checks(db: Session, limit: int = 2000) -> int:
+    """Postings saved before the company check existed get their verdict (the rules: instant)."""
+    jobs = db.scalars(select(Job).where(Job.company_verdict.is_(None)).limit(limit)).all()
+    for job in jobs:
+        apply_company_check(job)
+    if jobs:
+        db.flush()  # sessions don't autoflush: later queries in this request must see the verdicts
+    return len(jobs)
+
+
+def skip_suspicious_waiting(db: Session, user: User) -> int:
+    """Jobs waiting in Swipe Review whose company looks like a scam are skipped (unless you marked it legit)."""
+    if not user.prefs.get("skip_suspicious_companies", True):
+        return 0
+    waiting = db.scalars(
+        select(Application).join(Job, Job.id == Application.job_id)
+        .where(Application.user_id == user.id, Job.company_verdict == SUSPICIOUS,
+               Application.status.in_((ApplicationStatus.DISCOVERED, ApplicationStatus.MATCHED)),
+               Application.review_decision.is_(None))).all()
+    skipped = 0
+    for app in waiting:
+        if is_trusted(app.job, user.prefs):
+            continue
+        reasons = [r.removeprefix("⚠ ") for r in (app.job.company_check or {}).get("reasons") or [] if r.startswith("⚠")]
+        app.match_reasoning = "Possible fraud: " + ("; ".join(reasons[:2]) or "the company check flagged this posting")
+        set_status(db, app, ApplicationStatus.SKIPPED, "agent", app.match_reasoning)
+        skipped += 1
+    return skipped
+
+
+def verify_companies(db: Session, jobs: list[Job], run: RunLog | None = None, progress: ScanProgress | None = None) -> int:
+    """The company-check agent's second look: the AI on companies the rules couldn't verify (cached per
+    company: a verdict the AI gave in the last 30 days is reused)."""
+    if not get_llm().available:
+        return 0
+    seen: dict[str, CompanyCheck | None] = {}
+    asked = 0
+    since = datetime.now(UTC) - timedelta(days=30)
+    for job in jobs:
+        if job.company_verdict != UNVERIFIED or (job.company_check or {}).get("method") != "rules":
+            continue
+        key = job.company_name.strip().lower()
+        if key not in seen:
+            earlier = db.scalars(select(Job).where(func.lower(Job.company_name) == key, Job.id != job.id,
+                                                   Job.discovered_at >= since).limit(20)).all()
+            done = next((j for j in earlier if (j.company_check or {}).get("method") == "ai"), None)
+            if done is not None:
+                seen[key] = CompanyCheck(done.company_verdict or UNVERIFIED, int(done.company_check.get("score") or 50),
+                                         list(done.company_check.get("reasons") or []), done.company_tier, "ai")
+            elif asked < COMPANY_AI_CHECKS_PER_SCAN:
+                checkpoint(db)  # no write lock held while the AI thinks
+                seen[key] = verify_with_llm(job, check_job(job))
+                asked += 1
+                if progress is not None:
+                    progress.tick()
+            else:
+                seen[key] = None
+        if seen[key] is not None:
+            apply_company_check(job, seen[key])
+    if run and asked:
+        run.log(f"Company check: the AI looked at {asked} unknown compan{'y' if asked == 1 else 'ies'}")
+    return asked
+
+
+def scan_platforms(prefs: dict[str, Any], requested: list[str] | None = None) -> list[str]:
+    """The sources a scan searches: the ones you asked for, or your saved ones plus the top companies."""
+    chosen = list(requested or prefs.get("platforms") or list(SCRAPERS))
+    if not requested and prefs.get("scan_top_companies", True) and "top_companies" in SCRAPERS \
+            and "top_companies" not in chosen:
+        chosen.insert(0, "top_companies")
+    return chosen
+
+
+def suspicious_message(job: Job) -> str:
+    flags = [r.removeprefix("⚠ ") for r in (job.company_check or {}).get("reasons") or [] if r.startswith("⚠")]
+    why = f" ({'; '.join(flags[:2])})" if flags else ""
+    return (f"⚠ {job.company_name} looks like a possible fraud{why}, so nothing is sent to it. If you're sure "
+            "it's real, mark it legit first.")
+
+
+def company_hold_reason(job: Job) -> str:
+    reasons = [r.removeprefix("⚠ ") for r in (job.company_check or {}).get("reasons") or []]
+    why = f" ({reasons[0]})" if reasons else ""
+    return (f"Not sent automatically: {job.company_name} isn't a verified company{why}. Check it, then submit it "
+            "yourself — or mark it legit so the agent applies to it automatically.")
 
 
 def embed_jobs(db: Session, jobs: list[Job]) -> None:
@@ -361,7 +465,7 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
              auto_prepare: bool = True, run: RunLog | None = None) -> AgentRun:
     run = run or RunLog(db, user, "scan", trigger)
     prefs = user.prefs
-    chosen = platforms or prefs.get("platforms") or list(SCRAPERS)
+    chosen = scan_platforms(prefs, platforms)
     progress = ScanProgress(db, run.run, [p for p in chosen if p in SCRAPERS])
     try:
         master = get_master_resume(db, user)
@@ -375,6 +479,10 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
             if dropped:
                 run.log(f"Location focus: kept ~{query.focus.share}% of postings in {query.focus.country.title()} "
                         f"({dropped} from elsewhere left out this scan)")
+        scraped, capped = cap_internshala(scraped, prefs.get("internshala_share"), query.focus)
+        if capped:
+            run.log(f"Internshala: kept at most {prefs.get('internshala_share', 25)}% of this scan's postings, the best "
+                    f"ones ({capped} more left out)")
         progress.found = len(scraped)
         progress.to_save = len(scraped)
         progress.set_phase("saving", f"Saving {len(scraped)} postings")
@@ -397,6 +505,12 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
                 progress.tick()
         run.run.jobs_discovered = len(new_apps)
         run.log(f"Discovered {len(scraped)} postings, {len(new_apps)} new for you")
+        backfill_company_checks(db)
+        progress.set_phase("saving", "Checking the companies behind the new postings")
+        verify_companies(db, [a.job for a in new_apps], run, progress)
+        flagged = sum(1 for a in new_apps if a.job.company_verdict == SUSPICIOUS)
+        if flagged:
+            run.log(f"Company check: {flagged} posting{'s' if flagged != 1 else ''} with scam signs (skipped)")
         progress.set_phase("saving", f"Reading {len(new_apps)} new postings")  # embedding may call an API
         embed_jobs(db, jobs)
         checkpoint(db)
@@ -807,12 +921,23 @@ def unanswered_questions(app: Application, trust_generated: bool = False) -> lis
     return blocking
 
 
+def ready_or_submit(db: Session, user: User, app: Application, run: RunLog | None = None) -> None:
+    _ready_or_submit(db, user, app, run)
+
+
 def _ready_or_submit(db: Session, user: User, app: Application, run: RunLog | None = None) -> None:
     """Kept jobs go straight to submission when nothing needs a human; everything else waits for review."""
     from app.worker.dispatch import enqueue
 
     if app.auto_submit and app.review_decision == "keep" and _may_auto_submit(user, app):
         blockers = unanswered_questions(app, trust_generated=bool(user.prefs.get("trust_generated_answers", True)))
+        # Only verified companies are applied to on their own; your "Apply with the bot" click is your OK for this one
+        if not app.needs_manual_review and not blockers and not is_trusted(app.job, user.prefs) \
+                and not bot_apply_requested(app):
+            app.needs_manual_review = True
+            app.manual_review_reason = company_hold_reason(app.job)
+            if run:
+                run.log(f"Waiting for you: {app.job.company_name} isn't a verified company")
         if not app.needs_manual_review and not blockers:
             set_status(db, app, ApplicationStatus.APPROVED, "user", "Approved when you kept it in Swipe Review")
             if run:
@@ -883,6 +1008,8 @@ def bot_apply(db: Session, user: User, app: Application) -> Application:
 
     if not is_internshala_job(app.job):
         raise ValueError("“Apply with the bot” is for Internshala postings; use Submit for this one")
+    if app.job.company_verdict == SUSPICIOUS and not is_trusted(app.job, user.prefs):
+        raise ValueError(suspicious_message(app.job))
     missing = internshala_missing(user)
     if missing:
         raise ValueError(INTERNSHALA_MISSING[missing])
@@ -976,6 +1103,8 @@ def direct_submit_blocker(user: User, app: Application) -> str | None:
     Boards like Internshala only take applications from your own logged-in account; Internshala
     can, once you turn on its bot and sync your login.
     """
+    if app.job.company_verdict == SUSPICIOUS and not is_trusted(app.job, user.prefs):
+        return suspicious_message(app.job)
     if is_internshala_job(app.job):
         missing = internshala_missing(user)
         if missing:

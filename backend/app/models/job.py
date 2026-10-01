@@ -17,6 +17,8 @@ class Job(Base):
         Index("idx_jobs_company", "company_name"),
         Index("idx_jobs_platform", "source_platform"),
         Index("idx_jobs_dedupe", "dedupe_key"),
+        Index("idx_jobs_company_tier", "company_tier"),
+        Index("idx_jobs_company_verdict", "company_verdict"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -48,6 +50,12 @@ class Job(Base):
     extracted_skills: Mapped[list[str] | None] = mapped_column(JSONType)
     extracted_requirements: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     raw_data: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+
+    # The company check (services/company_verifier.py): verified | unverified | suspicious, the tier of a
+    # renowned company (big_tech | product | startup_india | startup_global | ai) and the reasons.
+    company_verdict: Mapped[str | None] = mapped_column(String(16))
+    company_tier: Mapped[str | None] = mapped_column(String(32))
+    company_check: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
 
     posted_date: Mapped[date | None] = mapped_column(Date)
     deadline_date: Mapped[date | None] = mapped_column(Date)

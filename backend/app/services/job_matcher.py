@@ -121,6 +121,14 @@ def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str
     if job.deadline_date and job.deadline_date < datetime.now(UTC).date():
         hard.append("Application deadline has passed")
 
+    if prefs.get("skip_suspicious_companies", True) and getattr(job, "company_verdict", None) == "suspicious":
+        from app.services.company_verifier import is_trusted
+
+        if not is_trusted(job, prefs):  # you can mark a company legit
+            flags = [r.removeprefix("⚠ ") for r in (getattr(job, "company_check", None) or {}).get("reasons") or []
+                     if r.startswith("⚠")]
+            hard.append("Possible fraud: " + ("; ".join(flags[:2]) or "the company check flagged this posting"))
+
     if prefs.get("exclude_no_sponsorship"):
         sponsorship = str((job.raw_data or {}).get("sponsorship") or "")
         if NO_SPONSORSHIP_PATTERNS.search(f"{sponsorship} {job.description[:6000]}"):

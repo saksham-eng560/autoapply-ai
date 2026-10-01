@@ -106,7 +106,7 @@ def _seed_queue(email: str, n: int = 4) -> list[str]:
         for i in range(n):
             job = make_job(company_name=f"Startup {i}", role_title=f"Software Engineer Intern {i}",
                            source_url=f"https://jobs.example/{email}/{i}", dedupe_key=f"{email}-{i}",
-                           is_remote=i % 2 == 0)
+                           is_remote=i % 2 == 0, company_verdict="verified")  # the company check passed
             db.add(job)
             db.flush()
             app = Application(user_id=user.id, job_id=job.id, status=ApplicationStatus.MATCHED, match_score=40 + i * 15,

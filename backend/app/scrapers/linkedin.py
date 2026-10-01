@@ -129,7 +129,7 @@ class LinkedInScraper(BaseScraper):
     def search(self, query: SearchQuery) -> list[ScrapedJob]:
         jobs: list[ScrapedJob] = []
         seen: set[str] = set()
-        keywords = query.keywords or [""]
+        keywords = query.search_terms or query.keywords or [""]
         locations = query.locations or ([""] if not query.remote else ["United States"])
         days = max(1, min(query.posted_within_days or 7, 30))
         for keyword in keywords:

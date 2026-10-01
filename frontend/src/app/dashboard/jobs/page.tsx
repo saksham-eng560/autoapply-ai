@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
 import { Briefcase, Building2, ExternalLink, Link2, MapPin, Plus, RefreshCw, Search, Wand2 } from "lucide-react";
+import { CompanyBadge, CompanyTag } from "@/components/company-badge";
 import { EmptyState } from "@/components/empty-state";
 import { IAppliedButton, canSelfApply } from "@/components/i-applied-button";
 import { Stagger, StaggerItem } from "@/components/motion";
@@ -66,6 +67,7 @@ function JobDialog({ jobId, onClose, onChanged }: { jobId: string | null; onClos
           <div className="flex items-start gap-4 bg-muted/50 p-3">
             <JobMatchBadge score={job.application?.match_score} />
             <div className="text-sm">
+              <CompanyBadge company={job.company_name} check={job.company} className="mb-2" />
               {job.application && <StatusBadge status={job.application.status} />}
               <p className="mt-1 text-muted-foreground">{job.application?.match_reasoning || "Not evaluated yet."}</p>
             </div>
@@ -182,6 +184,7 @@ export default function JobsPage() {
                   <p className="truncate font-medium">{job.role_title}</p>
                   <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1"><Building2 className="h-3 w-3" />{job.company_name}</span>
+                    <CompanyTag check={job.company} />
                     {job.location && <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" />{job.location}</span>}
                     {formatSalary(job.salary_min, job.salary_max, job.salary_currency) && <span>{formatSalary(job.salary_min, job.salary_max, job.salary_currency)}</span>}
                     <span>{titleCase(job.job_type)}</span>

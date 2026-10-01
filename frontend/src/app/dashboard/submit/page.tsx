@@ -8,6 +8,7 @@ import {
   AlertTriangle, ArrowUpRight, Bot, Building2, Check, CheckCheck, Copy, FileText, Layers, ListChecks, MapPin, Send, SkipForward,
   Undo2, X, ZoomIn,
 } from "lucide-react";
+import { CompanyBadge } from "@/components/company-badge";
 import { EmptyState } from "@/components/empty-state";
 import { IAppliedButton } from "@/components/i-applied-button";
 import { Modal } from "@/components/modal";
@@ -514,6 +515,7 @@ function SubmitInner() {
                     <span className="inline-flex items-center gap-1.5 font-semibold text-foreground"><Building2 className="h-4 w-4" />{job?.company_name}</span>
                     {job?.location && <span className="inline-flex min-w-0 items-center gap-1.5"><MapPin className="h-4 w-4 shrink-0" /><span className="truncate">{job.location}</span></span>}
                   </div>
+                  {job && <CompanyBadge company={job.company_name} check={job.company} className="mt-3" />}
                   <div className="mt-4 flex flex-wrap gap-2">
                     {item.apply_url && (
                       <a href={item.apply_url} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline", size: "sm" })}>

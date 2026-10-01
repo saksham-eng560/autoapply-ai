@@ -585,7 +585,7 @@ def test_internshala_preferences(auth_client: TestClient) -> None:
 def _setup(email: str = "jane@example.com", *, bot: bool = True, session: bool = True, valid: bool = True,
            auto_submit: bool = False, limit: int = 15, url: str | None = None,
            status: ApplicationStatus = ApplicationStatus.PREPARING, keep: bool = True,
-           raw: dict | None = None, filled: bool | None = None) -> str:
+           raw: dict | None = None, filled: bool | None = None, verdict: str = "verified") -> str:
     if filled is None:  # an approved / sent application was filled by the bot when it was staged
         filled = status in (ApplicationStatus.APPROVED, ApplicationStatus.APPLIED)
     url = url or f"https://internshala.com/internship/detail/python-{uuid.uuid4().hex[:8]}"
@@ -599,7 +599,8 @@ def _setup(email: str = "jane@example.com", *, bot: bool = True, session: bool =
         job = Job(company_name="Acme Labs", role_title="Python Development Intern", description="Python FastAPI internship. " * 30,
                   source_url=url, application_url=url, source_platform=ATSPlatform.CUSTOM, job_type=JobType.INTERNSHIP,
                   location="Delhi, India", dedupe_key=f"acme-{uuid.uuid4().hex[:8]}",
-                  raw_data={"listing_source": "internshala", "apply_on_site": "Internshala"} if raw is None else raw)
+                  raw_data={"listing_source": "internshala", "apply_on_site": "Internshala"} if raw is None else raw,
+                  company_verdict=verdict)  # these tests are about the bot: the company check passed (see below)
         db.add(job)
         db.flush()
         app = Application(user_id=user.id, job_id=job.id, status=status, auto_submit=keep,
@@ -1047,3 +1048,43 @@ def test_the_app_stores_the_renewed_login(auth_client: TestClient, master_resume
     app = _app(app_id)
     assert {c["name"]: c["value"] for c in app.user.internshala_session}["PHPSESSID"] == "renewed"
     assert app.user.internshala_session_valid is True
+
+
+@pytest.mark.parametrize("verdict", ["unverified", "suspicious"])
+def test_the_bot_only_applies_by_itself_to_verified_companies(auth_client: TestClient, master_resume: dict,
+                                                             monkeypatch: pytest.MonkeyPatch, verdict: str) -> None:
+    """Reported: Internshala is full of unknown and fraud companies. Submit automatically now needs the
+    company check to pass; your click (Apply with the bot) is your OK for an unverified one, never for fraud."""
+    rec = Recorder(monkeypatch)
+    app_id = _setup(auto_submit=True, verdict=verdict)
+    with run_inline(), SessionLocal() as db:
+        orch.stage_application(db, app_id)
+        db.commit()
+    app = _app(app_id)
+    assert [c[0] for c in rec.calls] == ["stage"] and app.status == ApplicationStatus.PENDING_APPROVAL
+    assert app.manual_review_reason.startswith("Not sent automatically: Acme Labs isn't a verified company")
+    r = auth_client.post(f"/api/v1/applications/{app_id}/bot-apply")
+    if verdict == "suspicious":
+        assert r.status_code == 409 and "possible fraud" in r.json()["detail"] and rec.calls == [("stage", rec.calls[0][1])]
+        return
+    assert r.status_code == 202, r.text
+
+
+def test_marking_a_company_legit_sends_what_waited_for_it(auth_client: TestClient, master_resume: dict,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = Recorder(monkeypatch)
+    app_id = _setup(auto_submit=True, verdict="unverified")
+    with run_inline(), SessionLocal() as db:
+        orch.stage_application(db, app_id)
+        db.commit()
+    assert [c[0] for c in rec.calls] == ["stage"]
+    with run_inline():
+        r = auth_client.post("/api/v1/jobs/company-trust", json={"company": "Acme Labs", "trusted": True})
+    assert r.status_code == 200 and r.json()["applications_updated"] == 1
+    assert [c[0] for c in rec.calls] == ["stage", "submit"] and _app(app_id).status == ApplicationStatus.APPLIED
+    # And "not legit": avoided from now on, its waiting jobs skipped
+    other = _setup(status=ApplicationStatus.MATCHED, verdict="unverified")
+    r = auth_client.post("/api/v1/jobs/company-trust", json={"company": "Acme Labs", "trusted": False})
+    assert r.json()["applications_updated"] == 1 and _app(other).status == ApplicationStatus.SKIPPED
+    prefs = auth_client.get("/api/v1/auth/me").json()["preferences"]
+    assert prefs["trusted_companies"] == [] and prefs["companies_to_avoid"][-1] == "Acme Labs"

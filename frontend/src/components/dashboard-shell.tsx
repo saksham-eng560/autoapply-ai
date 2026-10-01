@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import { LayoutGroup, motion } from "framer-motion";
 import {
-  BarChart3, Briefcase, CalendarDays, CheckCheck, FileText, Inbox, Layers, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText,
+  BarChart3, Briefcase, CalendarDays, CheckCheck, Crown, FileText, Inbox, Layers, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText,
   Send, Settings, type LucideIcon,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
@@ -40,6 +40,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/dashboard/review", label: "Swipe Review", icon: Layers, badge: "review" },
+      { href: "/dashboard/top-companies", label: "Top companies", icon: Crown },
       { href: "/dashboard/submit", label: "Ready to submit", icon: ListChecks, badge: "pending" },
       { href: "/dashboard/applications", label: "Applications", icon: Send },
       { href: "/dashboard/applied", label: "I Applied", icon: CheckCheck },

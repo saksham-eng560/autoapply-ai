@@ -48,6 +48,8 @@ function MassApplyPanel() {
       review_mode: prefs.review_mode, resume_strategy: prefs.resume_strategy, auto_submit_kept: prefs.auto_submit_kept, trust_generated_answers: prefs.trust_generated_answers,
       auto_keep_min_score: prefs.auto_keep_min_score, max_jobs_per_source: prefs.max_jobs_per_source,
       exclude_no_sponsorship: prefs.exclude_no_sponsorship, max_applications_per_day: prefs.max_applications_per_day,
+      internshala_share: prefs.internshala_share ?? 25, skip_suspicious_companies: prefs.skip_suspicious_companies ?? true,
+      scan_top_companies: prefs.scan_top_companies ?? true,
       sources: { internship_lists: prefs.sources.internship_lists || [] },
     } });
     await mutate();
@@ -114,6 +116,19 @@ function MassApplyPanel() {
           <Row label="Keep automatically at score" hint="Optional: jobs scoring at least this are kept without a swipe. Leave empty to swipe everything yourself.">
             <Input type="number" min={0} max={100} className="max-w-[8rem]" placeholder="off" value={prefs.auto_keep_min_score ?? ""}
               onChange={(e) => set("auto_keep_min_score", e.target.value === "" ? null : Number(e.target.value))} />
+          </Row>
+          <Row label="Search top companies in every scan" hint="Big tech, product companies, renowned Indian and global startups and AI companies, from their own job boards. They get their own page: Top companies.">
+            <Switch checked={prefs.scan_top_companies ?? true} onCheckedChange={(v) => set("scan_top_companies", v)} label="Search top companies in every scan" />
+          </Row>
+          <Row label="Internshala share of each scan" hint="At most this % of a scan's new postings come from Internshala, the best ones kept (known companies, no warning signs). 25 % = one Internshala posting for every three from elsewhere.">
+            <div className="flex items-center gap-2">
+              <Input type="number" min={0} max={100} className="max-w-[8rem]" value={prefs.internshala_share ?? 25}
+                onChange={(e) => set("internshala_share", Math.max(0, Math.min(100, Number(e.target.value) || 0)))} aria-label="Internshala share in percent" />
+              <span className="text-sm text-muted-foreground">%</span>
+            </div>
+          </Row>
+          <Row label="Skip possible fraud" hint="The company check skips postings with scam signs (asks for a fee or deposit, WhatsApp-only contact, earn-per-day promises, MLM). Either way, only verified companies are ever applied to automatically.">
+            <Switch checked={prefs.skip_suspicious_companies ?? true} onCheckedChange={(v) => set("skip_suspicious_companies", v)} label="Skip possible fraud" />
           </Row>
           <Row label="Skip jobs without visa sponsorship" hint="For international students: drop postings that say they don't sponsor or require citizenship.">
             <Switch checked={prefs.exclude_no_sponsorship} onCheckedChange={(v) => set("exclude_no_sponsorship", v)} label="Skip jobs without sponsorship" />
