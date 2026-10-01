@@ -557,7 +557,7 @@ function SubmitInner() {
                   </a>
                 )}
                 <Button variant="ghost" size="lg" className="px-3" onClick={skip} title="Come back to this one later (S)"><SkipForward /> Skip for now</Button>
-                <IAppliedButton applicationId={item.id} size="lg" variant="outline" onApplied={() => leave(null)} />
+                <IAppliedButton key={item.id} applicationId={item.id} size="lg" variant="outline" onApplied={() => leave(null)} />
               </div>
             ) : (
               <div className="mx-auto flex max-w-[880px] flex-col gap-3 xl:flex-row xl:items-center xl:gap-6">
