@@ -35,6 +35,9 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "internships_only": True,  # intern roles only, at every company: no full-time, new-grad or contract jobs
     "year_of_study": 2,        # 1-5 (None = any): skips "final-year only", "rising seniors", PhD / MBA-only internships
     "graduation_year": None,   # None = read from your resume's education (else estimated from your year)
+    # --- Tech focus (services/role_focus.py); empty = no filter. The "AI engineer · Python" preset fills both ---
+    "focus_skills": [],  # e.g. AI, LLMs, Python, FastAPI: a posting must name at least one
+    "avoid_skills": [],  # e.g. Java, Spring Boot: roles in these are skipped (unless they also ask for your stack)
     "notification_channels": ["email", "dashboard"],
     "notification_popups": True,  # off: no pop-ups in the dashboard or the OS; notifications still collect in the bell
     # --- Extended settings ---

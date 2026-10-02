@@ -20,6 +20,7 @@ from app.services import agent_orchestrator as orch
 from app.services import intern_level
 from app.services.application_service import set_status
 from app.services.company_catalog import CATALOG, TIERS, normalize_company
+from app.services.job_matcher import filter_reasons
 from app.worker.dispatch import enqueue
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -89,8 +90,8 @@ def top_companies(user: CurrentUser, db: DB, tier: str | None = None, q: str | N
                       .where(Job.is_active.is_(True), Job.company_tier.is_not(None))
                       .order_by(Application.match_score.desc().nulls_last(), Job.discovered_at.desc())
                       .limit(5000)).all()
-    # Internships for you only: no full-time roles, nothing only for final-year / PhD / MBA students
-    rows = [(job, app) for job, app in rows if not intern_level.intern_level_reasons(job, checked)]
+    # What your filters keep: internships for you, in your tech focus, no company you avoid
+    rows = [(job, app) for job, app in rows if not filter_reasons(job, checked)[0]]
     counts = Counter(job.company_tier for job, _ in rows)
     if tier:
         rows = [(job, app) for job, app in rows if job.company_tier == tier]

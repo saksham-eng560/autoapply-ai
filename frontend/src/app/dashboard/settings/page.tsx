@@ -28,6 +28,7 @@ const pill = (on: boolean) => cn("rounded-full border px-3 py-1 text-sm transiti
   on ? "border-primary bg-primary text-primary-foreground" : "border-foreground/30 hover:border-foreground");
 
 const PRESETS = [
+  { name: "ai-engineer", title: "AI engineer · Python", text: "From your resume: AI engineer, generative AI, LLM and Python / FastAPI internships, plus big tech software internships. Java, Spring Boot and data-science / analyst roles are left out. Only changes what you look for." },
   { name: "india-internships", title: "India · Summer 2027", text: "Internships only, ~90% in India with Delhi NCR first: Internshala, LinkedIn India and Indeed India, plus the Summer 2027 lists." },
   { name: "internships", title: "Internships", text: "Intern roles, 4,000+ curated listings (SimplifyJobs, vanshb03) plus 110 startup boards, 100 applications/day." },
   { name: "startups", title: "Startups", text: "Adds 110 startup Greenhouse, Ashby and Lever boards to your sources, keeps your roles and job types." },
@@ -60,7 +61,9 @@ function MassApplyPanel() {
     try {
       await post(`/users/me/preferences/preset/${name}`);
       await mutate();
-      toast({ title: "Preset applied", description: "Your roles, sources and limits are set for mass applying. Run a scan to fill your deck.", tone: "success" });
+      toast({ title: "Preset applied", tone: "success", description: name === "ai-engineer"
+        ? "Your roles and tech focus are set: AI and Python internships, no Java or data-science roles. Waiting cards that don't fit are skipped; run a scan to fill your deck."
+        : "Your roles, sources and limits are set for mass applying. Run a scan to fill your deck." });
     } catch (err) {
       toast({ title: "Could not apply preset", description: err instanceof ApiError ? err.message : String(err), tone: "error" });
     } finally {
@@ -72,11 +75,11 @@ function MassApplyPanel() {
       <Card>
         <CardHeader>
           <CardTitle>One-click presets</CardTitle>
-          <CardDescription>Presets extend your settings — your own roles, boards and exclusions are kept.</CardDescription>
+          <CardDescription>Presets extend your settings: your boards and exclusions are kept. “AI engineer · Python” sets your target roles and tech focus.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-px border-t bg-border p-0 md:grid-cols-2 xl:grid-cols-4">
-          {PRESETS.map((p) => (
-            <div key={p.name} className="flex flex-col bg-card p-5">
+        <CardContent className="grid gap-px border-t bg-border p-0 md:grid-cols-2 xl:grid-cols-3">
+          {PRESETS.map((p, i) => (
+            <div key={p.name} className={cn("flex flex-col bg-card p-5", i === 0 && "md:col-span-2")}>
               <p className="display text-xl">{p.title}</p>
               <p className="mt-2 flex-1 text-sm text-muted-foreground">{p.text}</p>
               <Button className="mt-4 self-start" size="sm" loading={applying === p.name} onClick={() => applyPreset(p.name)}>Apply preset</Button>
@@ -286,6 +289,12 @@ function PreferencesForm({ sourcesOnly = false }: { sourcesOnly?: boolean }) {
       <CardContent>
         <Row label="Target roles" hint="Job titles to look for">
           <TagInput value={prefs.target_roles} onChange={(v) => set("target_roles", v)} placeholder="Software Engineer, Backend Engineer…" />
+        </Row>
+        <Row label="Tech focus" hint="A posting must name at least one of these (judged on the whole posting). Leave empty to keep every stack.">
+          <TagInput value={prefs.focus_skills || []} onChange={(v) => set("focus_skills", v)} placeholder="AI, LLMs, Python, FastAPI…" />
+        </Row>
+        <Row label="Skip these technologies" hint="Roles in these are left out: a title that names one, or a posting that asks for one and none of your languages or frameworks.">
+          <TagInput value={prefs.avoid_skills || []} onChange={(v) => set("avoid_skills", v)} placeholder="Java, Spring Boot…" />
         </Row>
         <Row label="Target locations">
           <TagInput value={prefs.target_locations} onChange={(v) => set("target_locations", v)} placeholder="San Francisco, New York…" />

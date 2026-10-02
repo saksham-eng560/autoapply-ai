@@ -21,6 +21,7 @@ from app.services.location_focus import (
     location_tier,
     season_status,
 )
+from app.services.role_focus import focus_reasons
 from app.services.text_utils import (
     canonical_skill,
     display_skill,
@@ -120,6 +121,7 @@ def filter_reasons(job: Job, prefs: dict[str, Any]) -> tuple[list[str], list[str
         hard.extend(intern_level_reasons(job, prefs))
     elif job_types and job.job_type is not None and job.job_type.value not in job_types:
         hard.append(f"Job type {job.job_type.value} not in preferences")
+    hard.extend(focus_reasons(job, prefs))  # Java roles out when you skip Java; AI / Python roles in
 
     if job.deadline_date and job.deadline_date < datetime.now(UTC).date():
         hard.append("Application deadline has passed")
@@ -301,7 +303,7 @@ def llm_evaluation(resume_content: dict[str, Any], job: Job, prefs: dict[str, An
         user_preferences_json={k: prefs.get(k) for k in (
             "target_roles", "target_locations", "remote_preference", "salary_min", "salary_max",
             "experience_level", "industries", "companies_to_avoid", "companies_to_target", "job_types",
-            "location_focus", "internship_season")},
+            "location_focus", "internship_season", "focus_skills", "avoid_skills")},
         master_resume_json=resume_content,
         company_name=job.company_name,
         role_title=job.role_title,

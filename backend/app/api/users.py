@@ -106,6 +106,11 @@ def _validate_internshala(prefs: dict) -> None:  # type: ignore[type-arg]
     grad = prefs.get("graduation_year")
     if grad is not None and (not isinstance(grad, int) or isinstance(grad, bool) or not 2000 <= grad <= 2100):
         raise HTTPException(422, "graduation_year must be a year like 2029 (or empty)")
+    for key in ("focus_skills", "avoid_skills"):
+        skills = prefs.get(key)
+        if not isinstance(skills, list) or len(skills) > 50 or not all(isinstance(s, str) and 0 < len(s.strip()) <= 60
+                                                                       for s in skills):
+            raise HTTPException(422, f"{key} must be a list of skills (up to 50, each up to 60 characters)")
     for key in ("skip_suspicious_companies", "scan_top_companies", "internships_only"):
         if not isinstance(prefs.get(key), bool):
             raise HTTPException(422, f"{key} must be true or false")

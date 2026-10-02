@@ -185,6 +185,7 @@ breakdown, the skills you have and the ones they want.
 
 | Preset | What it adds |
 |---|---|
+| **AI engineer · Python** | Built from an AI-engineering resume: AI engineer, generative AI, LLM, Python / FastAPI and backend internships plus big tech software internships. Java, Spring Boot and data-science / analyst roles are left out (Tech focus and Skip these technologies in Settings › Preferences). Only changes what you look for: your sources, limits and location stay. |
 | **India · Summer 2027** | Internships only for Summer 2027, ~90% in India with Delhi NCR first: Internshala, LinkedIn India and Indeed India, plus the Summer 2027 lists for the rest. |
 | **Internships** | Intern versions of your target roles, internship-only job types, the SimplifyJobs and vanshb03 internship lists (4,000+ live postings, refreshed daily), ~110 startup Greenhouse / Ashby / Lever boards, 100 applications a day, 300 jobs per source per scan. |
 | **Startups** | The ~110 startup boards, keeping your roles and job types. |
@@ -232,6 +233,10 @@ as the prime location. All of it is in Settings › Preferences › Internship f
   too: final-year or pre-final-year only, "rising seniors", PhD / Master's / MBA only, another graduating
   batch, or "2+ years of experience". Ones that name your year (Google STEP, "1st and 2nd year
   students") are tagged **Open to 2nd-year students**. Settings › Preferences › Search preferences.
+- **Your tech focus.** With **Tech focus** (e.g. AI, LLMs, Python, FastAPI) a posting must name one of
+  them; with **Skip these technologies** (e.g. Java, Spring Boot) a role whose title names one, or that
+  asks for one and none of your languages or frameworks, is left out. "Java or Python" roles and big tech
+  software internships stay. Cards already waiting that don't fit are skipped with the reason.
 - **At most 10 from Internshala a scan.** Each scan adds the best 10 new Internshala postings at most
   (and never more than 25% of the scan), so they don't crowd out the rest. Settings › Mass apply.
 - **Internshala applications** need your own Internshala login. By default the agent prepares your

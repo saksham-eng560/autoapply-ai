@@ -61,7 +61,18 @@ def intern_roles(current: list[str] | None) -> list[str]:
     return _union(out, [])
 
 
-PRESETS = ("internships", "startups", "new-grad", "india-internships")
+# "AI engineer · Python": an AI-native developer's internships (Python, FastAPI, LLM apps, agents, on-device AI),
+# Python backend next, big tech software internships kept; Java and data-science / analyst roles out.
+AI_ENGINEER_ROLES = ["AI Engineer Intern", "Generative AI Intern", "Python Developer Intern",
+                     "Machine Learning Engineer Intern", "Backend Developer Intern", "Software Engineer Intern"]
+AI_FOCUS_SKILLS = ["AI", "LLMs", "Generative AI", "AI agents", "RAG", "Machine Learning", "Python", "FastAPI",
+                   "Django", "Flask", "PyTorch", "Hugging Face", "LangChain"]
+AI_AVOID_SKILLS = ["Java", "Spring Boot"]
+AI_EXCLUDED_TITLES = ["Java", "Spring Boot", "Data Science", "Data Scientist", "Data Analyst", "Data Analytics",
+                      "Business Analyst", "Business Analytics"]
+_OFF_FOCUS_SEARCH = re.compile(r"java(?!script)|data-scien|data-analy|business-analy", re.I)
+
+PRESETS = ("ai-engineer", "internships", "startups", "new-grad", "india-internships")
 INDIA_PLATFORMS = ["internshala", "linkedin", "indeed", "internships", "greenhouse", "lever", "ashby", "generic"]
 
 
@@ -71,6 +82,18 @@ def apply_preset(prefs: dict[str, Any], name: str) -> dict[str, Any]:
         raise ValueError(f"Unknown preset '{name}' (choose from {', '.join(PRESETS)})")
     current = merge_preferences(prefs, None)
     sources = copy.deepcopy(current.get("sources") or {})
+    if name == "ai-engineer":  # only what you look for changes: your sources, limits and location stay
+        sources["internshala_urls"] = [u for u in sources.get("internshala_urls") or [] if not _OFF_FOCUS_SEARCH.search(u)]
+        return merge_preferences(current, {
+            "target_roles": list(AI_ENGINEER_ROLES),
+            "focus_skills": list(AI_FOCUS_SKILLS),
+            "avoid_skills": list(AI_AVOID_SKILLS),
+            "keywords_exclude": _union(current.get("keywords_exclude"), AI_EXCLUDED_TITLES),
+            "internships_only": True,
+            "job_types": ["internship"],
+            "experience_level": ["internship"],
+            "sources": sources,
+        })
     sources["greenhouse_boards"] = _union(sources.get("greenhouse_boards"), STARTUP_GREENHOUSE)
     sources["ashby_boards"] = _union(sources.get("ashby_boards"), STARTUP_ASHBY)
     sources["lever_companies"] = _union(sources.get("lever_companies"), STARTUP_LEVER)
