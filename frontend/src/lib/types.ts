@@ -49,6 +49,10 @@ export interface Preferences {
   year_of_study?: number | null;
   /** null = read from your resume (else estimated from your year of study). */
   graduation_year?: number | null;
+  /** Your tech focus (AI, LLMs, Python, FastAPI...): a posting must name at least one. Empty = no filter. */
+  focus_skills?: string[];
+  /** Technologies you skip (Java, Spring Boot...): roles in them are left out unless they also ask for your stack. */
+  avoid_skills?: string[];
   skip_suspicious_companies?: boolean;
   /** Companies you marked legit: applied to automatically like verified ones. */
   trusted_companies?: string[];

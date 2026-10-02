@@ -53,7 +53,7 @@ from app.services.application_service import set_status
 from app.services.company_verifier import SUSPICIOUS, UNVERIFIED, CompanyCheck, check_job, is_trusted, verify_with_llm
 from app.services.cover_letter import generate_cover_letter
 from app.services.embeddings import cosine_similarity, embed_text, embed_texts
-from app.services.intern_level import drop_ineligible, intern_level_reasons, internships_only, student, with_resume
+from app.services.intern_level import drop_ineligible, student, with_resume
 from app.services.job_matcher import evaluate_match, filter_reasons, job_text, prefilter, priority_key
 from app.services.llm import get_llm, llm_budget
 from app.services.location_focus import balance_by_location, get_focus, get_season, location_tier, season_status
@@ -62,6 +62,7 @@ from app.services.pdf_generator import render_resume_pdf
 from app.services.question_answerer import answer_questions, learnable_key, mappings_dict
 from app.services.rate_limiter import rate_limiter
 from app.services.resume_tailor import light_tailor, tailor_resume
+from app.services.role_focus import drop_off_focus
 from app.services.scan_progress import ScanCancelled, ScanProgress
 from app.services.source_mix import cap_internshala
 from app.services.text_utils import dedupe_key, extract_skills
@@ -207,11 +208,9 @@ def skip_suspicious_waiting(db: Session, user: User) -> int:
 
 
 def skip_ineligible_waiting(db: Session, user: User) -> int:
-    """Jobs waiting in Swipe Review that aren't internships for you (full-time, new grad, final-year-only, PhD-only...)
-    are skipped, with the reason."""
+    """Jobs waiting in Swipe Review that your filters now rule out (not an internship for you, a Java role when you
+    skip Java, outside your tech focus, a company you avoid...) are skipped, with the reason."""
     prefs = user.prefs
-    if not internships_only(prefs):
-        return 0
     waiting = db.scalars(
         select(Application).join(Job, Job.id == Application.job_id)
         .where(Application.user_id == user.id,
@@ -223,7 +222,7 @@ def skip_ineligible_waiting(db: Session, user: User) -> int:
     prefs = with_resume(prefs, master.parsed_content if master else None)
     skipped = 0
     for app in waiting:
-        reasons = intern_level_reasons(app.job, prefs)
+        reasons = filter_reasons(app.job, prefs)[0]  # the hard ones: the same a scan applies
         if reasons:
             app.match_reasoning = reasons[0]
             set_status(db, app, ApplicationStatus.SKIPPED, "agent", reasons[0])
@@ -517,6 +516,11 @@ def run_scan(db: Session, user: User, trigger: str = "user", platforms: list[str
         if not_for_you:
             run.log(f"Interns only: left out {not_for_you} posting{'s' if not_for_you != 1 else ''} that aren't "
                     f"internships for {student_label(prefs)} (full-time roles, PhD / MBA-only, final-year-only...)")
+        scraped, off_focus = drop_off_focus(scraped, prefs)
+        if off_focus:
+            run.log(f"Tech focus: left out {off_focus} posting{'s' if off_focus != 1 else ''} outside "
+                    f"{', '.join(prefs.get('focus_skills') or []) or 'your focus'}"
+                    + (f" or in {', '.join(prefs.get('avoid_skills'))}" if prefs.get("avoid_skills") else ""))
         if query.focus is not None:
             scraped, dropped = balance_by_location(scraped, query.focus)
             if dropped:
